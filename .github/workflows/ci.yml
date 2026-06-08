@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install app dependencies
+        run: npm install
+
+      - name: Syntax check all JS
+        run: |
+          set -e
+          for f in $(git ls-files '*.js' '*.cjs' '*.mjs' | grep -v '^node_modules/'); do
+            node --check "$f"
+          done
+
+      - name: Validate JSON
+        run: |
+          node -e "['package.json','public/manifest.json','vercel.json'].forEach(f=>{JSON.parse(require('fs').readFileSync(f,'utf8'));console.log('ok',f)})"
+
+      - name: Install Puppeteer (CI only) + Chrome
+        run: |
+          npm install --no-save puppeteer
+          npx puppeteer browsers install chrome
+
+      - name: Headless smoke test
+        run: node test/smoke.cjs
