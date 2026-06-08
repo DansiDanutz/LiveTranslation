@@ -3,62 +3,78 @@
 Real-time **speech-to-speech translation** in the browser. You speak, and it
 streams translated **audio + live captions** back while you're still talking —
 powered by OpenAI's [`gpt-realtime-translate`](https://developers.openai.com/api/docs/models/gpt-realtime-translate)
-model.
+model, connected over **WebRTC**.
 
 - **70+ input languages → 13 output languages** (auto source detection)
 - **Live dual captions** (your speech + the translation)
 - **Auto-playing translated voice**, pace-matched and low latency
-- **Google sign-in** via Supabase (free), with optional transcript history
-- **Your API key never reaches the browser** — a Node WebSocket relay holds it
+- **Google sign-in** via Supabase (free)
+- **Deploys to Vercel** — your API key never reaches the browser
 
-> Built strictly on the documented translation endpoint:
-> `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate`,
-> 24 kHz PCM16 audio, and the documented `session.update` /
-> `session.input_audio_buffer.append` → `session.output_audio.delta` /
-> `session.*_transcript.delta` events.
+> Built on the documented WebRTC translation flow:
+> ephemeral token from `POST /v1/realtime/translations/client_secrets`, then a
+> browser WebRTC call to `POST /v1/realtime/translations/calls` with an
+> `oai-events` data channel for transcripts.
 
 ---
 
 ## How it works
 
 ```
- Browser mic ─▶ capture-worklet (24 kHz PCM16) ─▶  Node relay  ─▶ OpenAI
-                                                   (holds key)      gpt-realtime-translate
- Speakers ◀── playback-worklet ◀── translated audio + captions ◀──┘
+ Browser                              Your serverless /api/token        OpenAI
+ ───────                              ─────────────────────────        ──────
+ 1. POST /api/token  ───────────────▶ verify Supabase user
+                                      mint ephemeral token  ──────────▶ /translations/client_secrets
+ 2. WebRTC offer (mic) ───────────────────────────────────────────────▶ /translations/calls
+ 3. ◀── translated audio (media track) + transcripts (data channel) ───
 ```
 
-1. The browser captures mic audio and downsamples it to **24 kHz PCM16** in an
-   `AudioWorklet`.
-2. Audio is streamed to the Node server over a WebSocket.
-3. The server authenticates the user (Supabase access token), opens the OpenAI
-   translation session, and relays the documented events both ways.
-4. Translated audio chunks play instantly; source + target transcripts render
-   as live captions.
+1. The browser asks our serverless `/api/token` function for a **short-lived
+   token**. The function verifies the signed-in user (Supabase) and mints the
+   token using the secret OpenAI key — which never leaves the server.
+2. The browser opens a **WebRTC** peer connection, sends its mic audio, and
+   completes the SDP handshake directly with OpenAI.
+3. Translated **audio** comes back as a media track (plays instantly);
+   **source + target transcripts** arrive over the `oai-events` data channel and
+   render as live captions.
+
+Because there's no long-lived server socket, this runs perfectly on Vercel's
+serverless platform.
 
 ---
 
-## Quick start
+## Quick start (local)
 
-### 1. Prerequisites
-- Node.js 18+
-- An OpenAI API key with access to `gpt-realtime-translate`
-- (Optional but recommended) a free Supabase project for Google sign-in
-
-### 2. Install
 ```bash
 npm install
-cp .env.example .env
-# edit .env and add OPENAI_API_KEY (and Supabase values if using sign-in)
+cp .env.example .env          # add OPENAI_API_KEY (+ Supabase keys for sign-in)
+npm start                     # http://localhost:3000
 ```
 
-### 3. Run
-```bash
-npm start
-# open http://localhost:3000
-```
+`npm start` runs a small Express server that mounts the same `/api` functions
+and serves `public/`, so local dev matches production. (You can also use
+`vercel dev` if you have the Vercel CLI.)
 
 Without Supabase configured, the app runs in **open/demo mode** (no sign-in).
-Add the Supabase values to require **Google sign-in**.
+
+---
+
+## Deploy to Vercel
+
+1. Push this repo to GitHub and **import it** at
+   [vercel.com/new](https://vercel.com/new) (or run `vercel`). The included
+   `vercel.json` serves `public/` statically and builds the `/api` functions.
+2. In **Project → Settings → Environment Variables**, add:
+   | Variable | Required | Notes |
+   |----------|----------|-------|
+   | `OPENAI_API_KEY` | ✅ | Needs `gpt-realtime-translate` access. Server-side only. |
+   | `SUPABASE_URL` | for sign-in | Supabase project URL |
+   | `SUPABASE_ANON_KEY` | for sign-in | Public anon key |
+3. **Redeploy.** Then add your Vercel domain to Supabase
+   **Authentication → URL Configuration → Redirect URLs** (and the Google OAuth
+   authorized origins) so Google sign-in works on the deployed site.
+
+That's it — open your `*.vercel.app` URL and start translating.
 
 ---
 
@@ -66,31 +82,13 @@ Add the Supabase values to require **Google sign-in**.
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. **Authentication → Providers → Google**: enable it and paste your Google
-   OAuth **Client ID/Secret** (create them in the
-   [Google Cloud Console](https://console.cloud.google.com/apis/credentials)).
-   - Authorized redirect URI:
-     `https://YOUR-PROJECT.supabase.co/auth/v1/callback`
-   - Also add your app origin (e.g. `http://localhost:3000`) under
-     **Authentication → URL Configuration → Redirect URLs**.
-3. **Settings → API**: copy the **Project URL**, **anon public** key, and
-   **service_role** key into `.env`.
-4. (Optional) For saved transcript history, run
-   [`supabase/schema.sql`](supabase/schema.sql) in the SQL editor.
-
-That's it — restart the server and the login screen will show
-**Continue with Google**.
-
----
-
-## Configuration reference
-
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `OPENAI_API_KEY` | ✅ | Server-side key for the translation model |
-| `PORT` | — | Server port (default `3000`) |
-| `SUPABASE_URL` | for auth | Supabase project URL |
-| `SUPABASE_ANON_KEY` | for auth | Public anon key (safe in browser) |
-| `SUPABASE_SERVICE_ROLE_KEY` | optional | Enables saving transcripts (keep secret) |
+   OAuth **Client ID/Secret** from the
+   [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+   - Authorized redirect URI: `https://YOUR-PROJECT.supabase.co/auth/v1/callback`
+   - Add your app origin(s) (e.g. `http://localhost:3000` and your Vercel URL)
+     under **Authentication → URL Configuration → Redirect URLs**.
+3. **Settings → API**: copy the **Project URL** and **anon public** key into your
+   environment variables.
 
 ---
 
@@ -107,6 +105,28 @@ That's it — restart the server and the login screen will show
 
 ---
 
+## Project structure
+
+```
+LiveTranslation/
+├── api/
+│   ├── token.js          # Serverless: verify user + mint ephemeral token
+│   └── config.js         # Serverless: public runtime config
+├── public/
+│   ├── index.html        # App shell (auth + translation views)
+│   ├── styles.css        # Design system (tokens + components)
+│   ├── app.js            # WebRTC client: mic, captions, audio, controls
+│   ├── auth.js           # Supabase Google sign-in
+│   └── languages.js      # Documented input/output languages
+├── supabase/schema.sql   # Optional: sessions table + RLS (for saved history)
+├── server.js             # Local dev server (mounts /api + serves public)
+├── vercel.json           # Static + functions config
+├── .env.example
+└── package.json
+```
+
+---
+
 ## Pricing
 
 `gpt-realtime-translate` is billed by **audio duration: $0.034 / minute**
@@ -114,32 +134,12 @@ That's it — restart the server and the login screen will show
 
 ---
 
-## Project structure
-
-```
-LiveTranslation/
-├── server.js                  # Express + WS relay, Supabase auth, persistence
-├── public/
-│   ├── index.html             # App shell (auth + translation views)
-│   ├── styles.css             # Design system (tokens + components)
-│   ├── app.js                 # App logic: capture, stream, captions, controls
-│   ├── auth.js                # Supabase Google sign-in
-│   ├── languages.js           # Documented input/output languages
-│   ├── capture-worklet.js     # Mic → 24 kHz PCM16
-│   └── playback-worklet.js    # Translated PCM16 → speakers
-├── supabase/schema.sql        # Sessions table + RLS policies
-├── .env.example
-└── package.json
-```
-
----
-
 ## Notes & limitations
 
 - The translation model is a dedicated **speech-in → speech-out** pipe, not a
-  chat agent. There is no `response.create`; translation flows from the audio
-  stream itself.
-- Source-language captions require input transcription, which this app enables
-  via the documented `gpt-realtime-whisper` transcription model.
-- Use **HTTPS** in production so the browser grants microphone access and
-  WebSocket upgrades to `wss`.
+  chat agent. Translation flows from the audio stream itself.
+- The **target language is set when the token is minted**, so changing it
+  reconnects with a fresh token (handled automatically).
+- Microphone access requires **HTTPS** (Vercel provides this) or `localhost`.
+- `supabase/schema.sql` is optional — included for teams who want to persist
+  per-user transcript history; the app itself offers copy/download out of the box.
