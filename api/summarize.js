@@ -40,12 +40,11 @@ export default async function handler(req, res) {
   const mode = body.mode === "overall" ? "overall" : "session";
   const language = (body.language || "").trim();
 
+  const writeIn = language ? ` Write the summary in ${language}.` : "";
   const system =
     mode === "overall"
-      ? "You receive several short summaries, each from a separate live speech-translation session. Produce ONE concise overall summary that synthesizes the recurring themes, key points, and any decisions across all sessions. Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Be faithful; do not invent details."
-      : `You summarize the transcript of a live speech-translation session.${
-          language ? ` Write the summary in ${language}.` : ""
-        } Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Capture the key content and intent. Be faithful; do not invent details.`;
+      ? `You receive several short summaries, each from a separate live speech-translation session. Produce ONE concise overall summary that synthesizes the recurring themes, key points, and any decisions across all sessions.${writeIn} Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Be faithful; do not invent details.`
+      : `You summarize the transcript of a live speech-translation session.${writeIn} Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Capture the key content and intent. Be faithful; do not invent details.`;
 
   try {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {

@@ -68,6 +68,7 @@ const els = {
   summaryCopy: $("#summary-copy"),
   summarizeAll: $("#summarize-all"),
   overallSummary: $("#overall-summary"),
+  summaryLang: $("#summary-lang"),
   // Balance
   balRemaining: $("#bal-remaining"),
   balBar: $("#bal-bar"),
@@ -82,6 +83,15 @@ const FONT_KEY = "lt-font-scale";
 const DEVICE_KEY = "lt-mic-device";
 const BAL_KEY = "lt-balance";
 const SPENT_KEY = "lt-spent-total";
+const SUMMARY_LANG_KEY = "lt-summary-lang";
+
+// Summaries can be written in any language — defaults to Romanian (which isn't
+// one of the 13 translation OUTPUT languages, so this is the way to get
+// Romanian out of the app).
+const SUMMARY_LANGUAGES = [
+  "Romanian", "English", "Spanish", "French", "German", "Italian",
+  "Portuguese", "Russian", "Chinese", "Japanese", "Arabic", "Hindi",
+];
 
 // ----- State ---------------------------------------------------------------
 let config = null;
@@ -112,6 +122,7 @@ let targetText = "";
   wireEvents();
   refreshMicDevices();
   renderBalance();
+  populateSummaryLanguages();
 
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
@@ -261,6 +272,10 @@ function wireEvents() {
     );
   });
   els.summarizeAll.addEventListener("click", summarizeAllSessions);
+
+  els.summaryLang.addEventListener("change", () =>
+    localStorage.setItem(SUMMARY_LANG_KEY, els.summaryLang.value)
+  );
 
   // Balance
   els.balSet.addEventListener("click", promptSetBalance);
@@ -683,6 +698,21 @@ function viewHistoryItem(item) {
 }
 
 // ----- Summaries -----------------------------------------------------------
+function populateSummaryLanguages() {
+  const saved = localStorage.getItem(SUMMARY_LANG_KEY) || "Romanian";
+  for (const lang of SUMMARY_LANGUAGES) {
+    const opt = document.createElement("option");
+    opt.value = lang;
+    opt.textContent = lang;
+    els.summaryLang.append(opt);
+  }
+  els.summaryLang.value = SUMMARY_LANGUAGES.includes(saved) ? saved : "Romanian";
+}
+
+function summaryLanguage() {
+  return els.summaryLang?.value || "Romanian";
+}
+
 async function summarize(text, mode, language) {
   const accessToken = await getAccessToken();
   const res = await fetch("/api/summarize", {
@@ -709,7 +739,7 @@ async function generateSessionSummary(entry) {
   els.summaryBody.textContent = "Summarizing this session…";
   els.summaryCard.hidden = false;
   try {
-    const summary = await summarize(text, "session", outputLanguageName(entry.target));
+    const summary = await summarize(text, "session", summaryLanguage());
     patchHistory(entry.id, { summary });
     showSummary(summary);
   } catch (err) {
@@ -735,7 +765,7 @@ async function summarizeAllSessions() {
       return `Session ${i + 1} (${outputLanguageName(it.target)}, ${when}):\n${body}`;
     });
   try {
-    const summary = await summarize(parts.join("\n\n"), "overall");
+    const summary = await summarize(parts.join("\n\n"), "overall", summaryLanguage());
     els.overallSummary.textContent = summary;
   } catch (err) {
     els.overallSummary.textContent = "Could not summarize: " + err.message;
