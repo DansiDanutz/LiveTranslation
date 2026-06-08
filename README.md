@@ -96,11 +96,18 @@ That's it — open your `*.vercel.app` URL and start translating.
 
 - One-tap mic, **spacebar** to toggle listening
 - Source + target **live captions** (large, readable, scrollable)
+- **Presentation mode** — fullscreen captions for translating to a room
+- **Adjustable caption size** (A− / A+)
+- **Light / dark theme** toggle (remembered)
+- **Microphone device picker**
+- **Session history** — past sessions auto-saved on-device; reopen or delete
+- **Installable PWA** — add to home screen, offline app shell
 - **Language swap** + remembers your last-used languages
 - **Mic level meter** and live **status** indicator
 - **Captions-only mode** (mute translated audio) + volume control
 - **Session timer** and **live cost estimate** ($0.034/min, per docs)
 - **Copy** / **download (.txt)** the transcript
+- **Google sign-in** (Supabase) with your API key kept server-side
 - Responsive, accessible (ARIA live regions, reduced-motion, high contrast)
 
 ---

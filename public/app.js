@@ -46,7 +46,25 @@ const els = {
   modelTag: $("#model-tag"),
   priceTag: $("#price-tag"),
   remoteAudio: $("#tts"),
+  // Feature controls
+  themeBtn: $("#theme-btn"),
+  historyBtn: $("#history-btn"),
+  presentBtn: $("#present-btn"),
+  fontInc: $("#font-inc"),
+  fontDec: $("#font-dec"),
+  micDevice: $("#mic-device"),
+  stage: $("#stage"),
+  drawer: $("#history-drawer"),
+  drawerBackdrop: $("#drawer-backdrop"),
+  historyClose: $("#history-close"),
+  historyClear: $("#history-clear"),
+  historyList: $("#history-list"),
 };
+
+const HISTORY_KEY = "lt-history";
+const THEME_KEY = "lt-theme";
+const FONT_KEY = "lt-font-scale";
+const DEVICE_KEY = "lt-mic-device";
 
 // ----- State ---------------------------------------------------------------
 let config = null;
@@ -72,7 +90,10 @@ let targetText = "";
 
   populateLanguages();
   restorePreferences();
+  restoreTheme();
+  restoreFontScale();
   wireEvents();
+  refreshMicDevices();
 
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
@@ -186,12 +207,101 @@ function wireEvents() {
   els.copyBtn.addEventListener("click", copyTranscript);
   els.downloadBtn.addEventListener("click", downloadTranscript);
 
+  // Theme
+  els.themeBtn.addEventListener("click", toggleTheme);
+
+  // Caption font size
+  els.fontInc.addEventListener("click", () => bumpFontScale(0.15));
+  els.fontDec.addEventListener("click", () => bumpFontScale(-0.15));
+
+  // Presentation (fullscreen) mode
+  els.presentBtn.addEventListener("click", togglePresent);
+
+  // Microphone device
+  els.micDevice.addEventListener("change", () => {
+    localStorage.setItem(DEVICE_KEY, els.micDevice.value);
+    if (listening) restartSession();
+  });
+  if (navigator.mediaDevices) {
+    navigator.mediaDevices.addEventListener?.("devicechange", refreshMicDevices);
+  }
+
+  // History drawer
+  els.historyBtn.addEventListener("click", openHistory);
+  els.historyClose.addEventListener("click", closeHistory);
+  els.drawerBackdrop.addEventListener("click", closeHistory);
+  els.historyClear.addEventListener("click", clearHistory);
+
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !els.drawer.hidden) closeHistory();
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
       listening ? stopListening() : startListening();
     }
   });
+}
+
+// ----- Theme ---------------------------------------------------------------
+function restoreTheme() {
+  const theme = localStorage.getItem(THEME_KEY) || "dark";
+  applyTheme(theme);
+}
+function applyTheme(theme) {
+  document.body.setAttribute("data-theme", theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme === "light" ? "#f3f5fb" : "#0b0f1a");
+}
+function toggleTheme() {
+  const next = document.body.getAttribute("data-theme") === "light" ? "dark" : "light";
+  applyTheme(next);
+  localStorage.setItem(THEME_KEY, next);
+}
+
+// ----- Caption font size ---------------------------------------------------
+function restoreFontScale() {
+  const scale = parseFloat(localStorage.getItem(FONT_KEY) || "1");
+  document.documentElement.style.setProperty("--caption-scale", String(scale));
+}
+function bumpFontScale(delta) {
+  const cur = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--caption-scale") || "1"
+  );
+  const next = Math.min(2.2, Math.max(0.7, cur + delta));
+  document.documentElement.style.setProperty("--caption-scale", String(next));
+  localStorage.setItem(FONT_KEY, String(next));
+}
+
+// ----- Presentation mode ---------------------------------------------------
+function togglePresent() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    els.stage.requestFullscreen?.().catch(() => showToast("Fullscreen not available."));
+  }
+}
+
+// ----- Microphone devices --------------------------------------------------
+async function refreshMicDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter((d) => d.kind === "audioinput");
+    const saved = localStorage.getItem(DEVICE_KEY) || "";
+    els.micDevice.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "Default microphone";
+    els.micDevice.append(def);
+    mics.forEach((d, i) => {
+      const opt = document.createElement("option");
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Microphone ${i + 1}`;
+      els.micDevice.append(opt);
+    });
+    if (saved && mics.some((m) => m.deviceId === saved)) els.micDevice.value = saved;
+  } catch {
+    /* ignore */
+  }
 }
 
 async function restartSession() {
@@ -200,7 +310,7 @@ async function restartSession() {
     `\n— reconnecting to translate into ${outputLanguageName(els.targetSelect.value)} —\n`,
     true
   );
-  await stopListening();
+  await stopListening(false); // don't fragment history on a language change
   await startListening();
 }
 
@@ -216,10 +326,13 @@ async function startListening() {
     // 1) Mint a short-lived token for this translation session.
     const token = await mintToken(els.targetSelect.value);
 
-    // 2) Capture mic audio.
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    // 2) Capture mic audio (from the chosen input device, if any).
+    const deviceId = localStorage.getItem(DEVICE_KEY) || "";
+    const audioConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+    if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    // Device labels are only exposed once permission is granted — refresh now.
+    refreshMicDevices();
 
     // 3) Establish the peer connection.
     pc = new RTCPeerConnection();
@@ -275,7 +388,17 @@ async function startListening() {
   }
 }
 
-async function stopListening() {
+async function stopListening(save = true) {
+  // Persist a completed session to local history (skip on language-swap restarts).
+  if (save && startTime && (sourceText.trim() || targetText.trim())) {
+    saveHistory({
+      ts: Date.now(),
+      target: els.targetSelect.value,
+      seconds: Math.round((Date.now() - startTime) / 1000),
+      sourceText: sourceText.trim(),
+      targetText: targetText.trim(),
+    });
+  }
   listening = false;
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";
@@ -426,6 +549,89 @@ function downloadTranscript() {
   a.download = `livetranslation-${Date.now()}.txt`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ----- Local session history ----------------------------------------------
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(entry) {
+  const items = loadHistory();
+  items.unshift({ id: String(entry.ts), ...entry });
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 50))); // cap at 50
+}
+
+function openHistory() {
+  renderHistory();
+  els.drawer.hidden = false;
+}
+function closeHistory() {
+  els.drawer.hidden = true;
+}
+
+function clearHistory() {
+  if (!loadHistory().length) return;
+  if (!confirm("Delete all saved sessions on this device?")) return;
+  localStorage.removeItem(HISTORY_KEY);
+  renderHistory();
+}
+
+function deleteHistoryItem(id) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(loadHistory().filter((i) => i.id !== id)));
+  renderHistory();
+}
+
+function renderHistory() {
+  const items = loadHistory();
+  els.historyList.innerHTML = "";
+  if (!items.length) {
+    els.historyList.innerHTML = '<div class="drawer__empty">No saved sessions yet.</div>';
+    return;
+  }
+  for (const item of items) {
+    const card = document.createElement("div");
+    card.className = "history-item";
+    const date = new Date(item.ts).toLocaleString();
+    const mins = Math.floor(item.seconds / 60);
+    const secs = item.seconds % 60;
+    const dur = `${mins}:${String(secs).padStart(2, "0")}`;
+    card.innerHTML = `
+      <div class="history-item__top">
+        <span class="history-item__lang">→ ${escapeHtml(outputLanguageName(item.target))}</span>
+        <span class="history-item__meta">${dur} · <button class="history-item__del" title="Delete">✕</button></span>
+      </div>
+      <div class="history-item__meta">${escapeHtml(date)}</div>
+      <div class="history-item__preview">${escapeHtml(item.targetText || item.sourceText || "")}</div>`;
+    card.querySelector(".history-item__del").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteHistoryItem(item.id);
+    });
+    card.addEventListener("click", () => viewHistoryItem(item));
+    els.historyList.append(card);
+  }
+}
+
+function viewHistoryItem(item) {
+  closeHistory();
+  els.targetSelect.value = item.target;
+  els.sourceCaption.innerHTML = "";
+  els.targetCaption.innerHTML = "";
+  appendCaption(els.sourceCaption, item.sourceText || "(no source transcript)");
+  appendCaption(els.targetCaption, item.targetText || "(no translation)");
+  sourceText = item.sourceText || "";
+  targetText = item.targetText || "";
+  showToast("Loaded a saved session", true);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }
 
 // ----- Toast ---------------------------------------------------------------
