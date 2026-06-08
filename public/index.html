@@ -189,6 +189,14 @@
           <span>🎙️</span>
           <select id="mic-device" class="select select--sm" aria-label="Microphone"></select>
         </label>
+
+        <button id="go-live" class="chip" data-on="false" title="Broadcast live captions to a shareable link">
+          📡 Go live
+        </button>
+        <div id="live-share" class="live-share" hidden>
+          <input id="live-link" class="ask__input" readonly />
+          <button id="live-copy" class="ask__send" type="button">Copy</button>
+        </div>
       </section>
 
       <!-- Session summary (appears after you stop the mic) -->
@@ -202,6 +210,18 @@
           </div>
         </div>
         <div id="summary-body" class="summary-card__body"></div>
+
+        <div class="summary-card__tools">
+          <button id="summary-actions" class="chip chip--mini">✅ Action items</button>
+        </div>
+        <div id="summary-actions-body" class="summary-actions" hidden></div>
+
+        <form id="ask-form" class="ask">
+          <input id="ask-input" class="ask__input" type="text"
+                 placeholder="Ask about this session…" autocomplete="off" />
+          <button id="ask-send" class="ask__send" type="submit">Ask</button>
+        </form>
+        <div id="ask-answer" class="ask__answer" hidden></div>
       </section>
 
       <footer class="meta">
@@ -265,6 +285,39 @@
       </div>
       <div id="menu-backdrop" class="menu__backdrop"></div>
     </aside>
+
+    <!-- ====================== LIVE LISTENER VIEW ======================= -->
+    <section id="live-view" class="live" hidden>
+      <header class="live__top">
+        <div class="brand">
+          <div class="brand__mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+              <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand__title">LiveTranslation</div>
+            <div class="brand__subtitle">Live · following a session</div>
+          </div>
+        </div>
+        <span id="live-status" class="pill"><span class="pill__dot"></span><span>Connecting…</span></span>
+      </header>
+      <div class="live__stage">
+        <div class="card caption caption--source">
+          <div class="caption__head"><span class="tag"></span> Speaker</div>
+          <div id="live-source" class="caption__body" aria-live="polite">
+            <span class="caption__placeholder">Waiting for the speaker…</span>
+          </div>
+        </div>
+        <div class="card caption caption--target">
+          <div class="caption__head"><span class="tag"></span> Translation</div>
+          <div id="live-target" class="caption__body" aria-live="polite">
+            <span class="caption__placeholder">Translation will appear here…</span>
+          </div>
+        </div>
+      </div>
+      <p class="live__hint">Read‑only live captions. No sign‑in or microphone needed.</p>
+    </section>
 
     <div id="toast" class="toast" data-show="false"></div>
 

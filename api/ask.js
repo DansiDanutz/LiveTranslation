@@ -1,6 +1,5 @@
-// api/summarize.js — Vercel serverless function.
-// Summarizes a translation session transcript (mode: "session") or combines
-// several session summaries into one overall summary (mode: "overall").
+// api/ask.js — Vercel serverless function.
+// Answers a question grounded ONLY in a session transcript (or all summaries).
 // Reuses the server-side OpenAI key via the Chat Completions API.
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -34,21 +33,16 @@ export default async function handler(req, res) {
   const user = await verifySupabaseUser(body.accessToken);
   if (!user) return res.status(401).json({ error: "Not authenticated. Please sign in." });
 
+  const question = String(body.question || "").slice(0, 800).trim();
   const text = String(body.text || "").slice(0, 24000).trim();
-  if (!text) return res.status(400).json({ error: "Nothing to summarize." });
-
-  const mode = ["overall", "actions"].includes(body.mode) ? body.mode : "session";
   const language = (body.language || "").trim();
+  if (!question) return res.status(400).json({ error: "No question provided." });
+  if (!text) return res.status(400).json({ error: "No transcript to search." });
 
-  const writeIn = language ? ` Write the output in ${language}.` : "";
-  let system;
-  if (mode === "overall") {
-    system = `You receive several short summaries, each from a separate live speech-translation session. Produce ONE concise overall summary that synthesizes the recurring themes, key points, and any decisions across all sessions.${writeIn} Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Be faithful; do not invent details.`;
-  } else if (mode === "actions") {
-    system = `Extract practical ACTION ITEMS and DECISIONS from this translation session transcript.${writeIn} Format exactly: a line 'Action items:' then '- ' bullets (each a clear task, include who/when if stated); then a line 'Decisions:' then '- ' bullets. If a section has none, write '- none'. Be faithful; do not invent.`;
-  } else {
-    system = `You summarize the transcript of a live speech-translation session.${writeIn} Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Capture the key content and intent. Be faithful; do not invent details.`;
-  }
+  const system =
+    `Answer the user's question using ONLY the provided transcript. If the answer isn't in the transcript, say you don't know based on the transcript — do not invent.` +
+    (language ? ` Answer in ${language}.` : "") +
+    ` Keep it concise.`;
 
   try {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -58,18 +52,15 @@ export default async function handler(req, res) {
         model: SUMMARY_MODEL,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: text },
+          { role: "user", content: `Transcript:\n${text}\n\nQuestion: ${question}` },
         ],
-        temperature: 0.3,
+        temperature: 0.2,
         max_tokens: 450,
       }),
     });
     const data = await r.json();
-    if (!r.ok) {
-      return res.status(r.status).json({ error: data?.error?.message || "Summary failed." });
-    }
-    const summary = data.choices?.[0]?.message?.content?.trim() || "";
-    return res.status(200).json({ summary });
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ask failed." });
+    return res.status(200).json({ answer: data.choices?.[0]?.message?.content?.trim() || "" });
   } catch (err) {
     return res.status(500).json({ error: String(err.message || err) });
   }

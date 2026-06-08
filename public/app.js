@@ -74,9 +74,23 @@ const els = {
   summaryClose: $("#summary-close"),
   summaryCopy: $("#summary-copy"),
   summaryPdf: $("#summary-pdf"),
+  summaryActions: $("#summary-actions"),
+  summaryActionsBody: $("#summary-actions-body"),
+  askForm: $("#ask-form"),
+  askInput: $("#ask-input"),
+  askAnswer: $("#ask-answer"),
   summarizeAll: $("#summarize-all"),
   overallSummary: $("#overall-summary"),
   summaryLang: $("#summary-lang"),
+  // Live broadcast
+  goLive: $("#go-live"),
+  liveShare: $("#live-share"),
+  liveLink: $("#live-link"),
+  liveCopy: $("#live-copy"),
+  liveView: $("#live-view"),
+  liveStatus: $("#live-status"),
+  liveSource: $("#live-source"),
+  liveTarget: $("#live-target"),
   // Balance
   balRemaining: $("#bal-remaining"),
   balBar: $("#bal-bar"),
@@ -123,6 +137,14 @@ let lastSession = null; // last completed/viewed session (for PDF export)
 
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
+  // Listener mode: anyone with a ?live=ROOM link follows a session read-only.
+  const liveRoom = new URLSearchParams(location.search).get("live");
+  if (liveRoom) {
+    config = await initAuth();
+    startListenerMode(liveRoom);
+    return;
+  }
+
   config = await initAuth();
   pricePerMinute = config.pricePerMinuteUsd ?? 0.034;
   els.modelTag.textContent = config.model;
@@ -340,7 +362,21 @@ function wireEvents() {
       }
     )
   );
+  els.summaryActions.addEventListener("click", generateActionItems);
+  els.askForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    askAboutSession();
+  });
   els.summarizeAll.addEventListener("click", summarizeAllSessions);
+
+  // Go live (broadcast captions)
+  els.goLive.addEventListener("click", toggleGoLive);
+  els.liveCopy.addEventListener("click", () => {
+    navigator.clipboard.writeText(els.liveLink.value).then(
+      () => showToast("Live link copied", true),
+      () => showToast("Could not copy")
+    );
+  });
 
   els.summaryLang.addEventListener("change", () =>
     localStorage.setItem(SUMMARY_LANG_KEY, els.summaryLang.value)
@@ -608,10 +644,12 @@ function handleEvent(evt) {
     case "session.input_transcript.delta":
       sourceText += evt.delta || "";
       appendCaption(els.sourceCaption, evt.delta || "");
+      broadcastCaption("source", evt.delta || "");
       break;
     case "session.output_transcript.delta":
       targetText += evt.delta || "";
       appendCaption(els.targetCaption, evt.delta || "");
+      broadcastCaption("target", evt.delta || "");
       break;
     case "error":
       showToast(evt.error?.message || "Translation error.");
@@ -843,7 +881,62 @@ async function summarize(text, mode, language) {
 function showSummary(text) {
   els.summaryBody.textContent = text;
   els.summaryCard.hidden = false;
+  // Reset the per-session tools for the newly shown session.
+  els.summaryActionsBody.hidden = true;
+  els.summaryActionsBody.textContent = "";
+  els.askAnswer.hidden = true;
+  els.askAnswer.textContent = "";
+  els.askInput.value = "";
   els.summaryCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Transcript text of the session currently shown in the summary card.
+function currentSessionText() {
+  const s = lastSession || { target: sessionTarget || els.targetSelect.value, sourceText, targetText };
+  const src = (s.sourceText || "").trim();
+  const tgt = (s.targetText || "").trim();
+  if (!src && !tgt) return "";
+  return `Spoken (source):\n${src || "(none)"}\n\nTranslation (${outputLanguageName(s.target)}):\n${tgt || "(none)"}`;
+}
+
+async function generateActionItems() {
+  const text = currentSessionText();
+  if (!text) {
+    showToast("No session to analyze yet.");
+    return;
+  }
+  els.summaryActionsBody.hidden = false;
+  els.summaryActionsBody.textContent = "Finding action items…";
+  try {
+    els.summaryActionsBody.textContent = await summarize(text, "actions", summaryLanguage());
+  } catch (err) {
+    els.summaryActionsBody.textContent = "Could not extract action items: " + err.message;
+  }
+}
+
+async function askAboutSession() {
+  const question = els.askInput.value.trim();
+  if (!question) return;
+  const text = currentSessionText();
+  if (!text) {
+    showToast("No session to ask about yet.");
+    return;
+  }
+  els.askAnswer.hidden = false;
+  els.askAnswer.textContent = "Thinking…";
+  try {
+    const accessToken = await getAccessToken();
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, text, language: summaryLanguage(), accessToken }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.answer === undefined) throw new Error(data.error || "Ask failed.");
+    els.askAnswer.textContent = data.answer || "(no answer)";
+  } catch (err) {
+    els.askAnswer.textContent = "Could not answer: " + err.message;
+  }
 }
 
 async function generateSessionSummary(entry) {
@@ -1068,6 +1161,89 @@ function exportPdf(s) {
     </body></html>`
   );
   w.document.close();
+}
+
+// ----- Live broadcast (Supabase Realtime; SDK loaded lazily) ---------------
+let _sbClient = null;
+let liveChannel = null;
+let liveRoomId = null;
+
+async function getSupabaseClient() {
+  if (_sbClient) return _sbClient;
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+  _sbClient = createClient(config.supabaseUrl, config.supabaseAnonKey);
+  return _sbClient;
+}
+
+async function toggleGoLive() {
+  if (liveChannel) return stopLive();
+  if (!config.supabaseUrl || !config.supabaseAnonKey) {
+    showToast("Live sharing needs Supabase configured.");
+    return;
+  }
+  try {
+    els.goLive.textContent = "📡 Starting…";
+    liveRoomId = Math.random().toString(36).slice(2, 8);
+    const sb = await getSupabaseClient();
+    liveChannel = sb.channel(`lt-live-${liveRoomId}`, { config: { broadcast: { self: false } } });
+    await liveChannel.subscribe();
+    els.liveLink.value = `${location.origin}/?live=${liveRoomId}`;
+    els.liveShare.hidden = false;
+    els.goLive.textContent = "📡 Stop live";
+    els.goLive.dataset.on = "true";
+    showToast("You're live — share the link so others can follow.", true);
+  } catch (err) {
+    showToast("Could not start live: " + err.message);
+    stopLive();
+  }
+}
+
+function stopLive() {
+  try {
+    liveChannel?.unsubscribe();
+  } catch {}
+  liveChannel = null;
+  liveRoomId = null;
+  els.liveShare.hidden = true;
+  els.goLive.textContent = "📡 Go live";
+  els.goLive.dataset.on = "false";
+}
+
+function broadcastCaption(kind, delta) {
+  if (!liveChannel || !delta) return;
+  liveChannel.send({ type: "broadcast", event: "cap", payload: { kind, delta } });
+}
+
+async function startListenerMode(room) {
+  // Show only the read-only live view.
+  els.authView.hidden = true;
+  els.appView.hidden = true;
+  els.liveView.hidden = false;
+  const setStatus = (t) => {
+    els.liveStatus.querySelector("span:last-child").textContent = t;
+  };
+  if (!config?.supabaseUrl) {
+    setStatus("Live unavailable");
+    return;
+  }
+  try {
+    const sb = await getSupabaseClient();
+    const ch = sb.channel(`lt-live-${room}`, { config: { broadcast: { self: true } } });
+    ch.on("broadcast", { event: "cap" }, ({ payload }) => {
+      const node = payload.kind === "source" ? els.liveSource : els.liveTarget;
+      const ph = node.querySelector(".caption__placeholder");
+      if (ph) ph.remove();
+      node.append(document.createTextNode(payload.delta || ""));
+      node.scrollTop = node.scrollHeight;
+      els.liveStatus.setAttribute("data-state", "listening");
+      setStatus("Live");
+    });
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") setStatus("Connected — waiting for speaker…");
+    });
+  } catch (err) {
+    setStatus("Could not connect");
+  }
 }
 
 // ----- Toast ---------------------------------------------------------------
