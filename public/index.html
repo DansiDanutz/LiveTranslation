@@ -13,6 +13,7 @@
       name="description"
       content="Real-time speech-to-speech translation powered by gpt-realtime-translate."
     />
+    <link rel="manifest" href="/manifest.json" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -27,7 +28,6 @@
       <div class="auth__card card">
         <div class="brand__mark auth__mark">
           <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-            <path d="M12 1v22M5 5l14 14M19 5L5 19" opacity="0" />
             <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
@@ -62,6 +62,17 @@
         </div>
 
         <div class="topbar__right">
+          <button id="history-btn" class="icon-btn" title="Session history" aria-label="Session history">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3v6h6M3.5 9a9 9 0 116 12.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M12 7v5l3 2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button id="theme-btn" class="icon-btn" title="Toggle theme" aria-label="Toggle light/dark theme">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
           <span id="status-pill" class="pill" data-state="idle">
             <span class="pill__dot"></span>
             <span id="status-text">Idle</span>
@@ -92,7 +103,12 @@
       </section>
 
       <!-- Live captions -->
-      <section class="stage">
+      <section id="stage" class="stage">
+        <button id="present-btn" class="present-btn" title="Presentation mode" aria-label="Presentation mode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
         <div class="card caption caption--source">
           <div class="caption__head"><span class="tag"></span> You said</div>
           <div id="source-caption" class="caption__body" aria-live="polite">
@@ -128,9 +144,18 @@
           </label>
           <span class="chip chip--stat">⏱ <span id="timer">00:00</span></span>
           <span class="chip chip--stat">💸 <span id="cost">$0.000</span></span>
+          <span class="chip chip--group" title="Caption size">
+            <button id="font-dec" class="chip__mini" aria-label="Smaller captions">A−</button>
+            <button id="font-inc" class="chip__mini" aria-label="Larger captions">A+</button>
+          </span>
           <button id="copy-transcript" class="chip">📋 Copy</button>
           <button id="download-transcript" class="chip">⬇ Save .txt</button>
         </div>
+
+        <label class="device-select">
+          <span>🎙️</span>
+          <select id="mic-device" class="select select--sm" aria-label="Microphone"></select>
+        </label>
       </section>
 
       <footer class="meta">
@@ -140,11 +165,35 @@
       </footer>
     </main>
 
+    <!-- ============================ HISTORY DRAWER ============================ -->
+    <aside id="history-drawer" class="drawer" hidden>
+      <div class="drawer__panel">
+        <div class="drawer__head">
+          <h2 class="drawer__title">Session history</h2>
+          <div class="drawer__actions">
+            <button id="history-clear" class="chip">🗑 Clear all</button>
+            <button id="history-close" class="icon-btn" aria-label="Close history">✕</button>
+          </div>
+        </div>
+        <div id="history-list" class="drawer__list"></div>
+        <p class="drawer__hint">History is stored privately on this device only.</p>
+      </div>
+      <div id="drawer-backdrop" class="drawer__backdrop"></div>
+    </aside>
+
     <div id="toast" class="toast" data-show="false"></div>
 
     <!-- Translated audio plays here (WebRTC remote track). -->
     <audio id="tts" autoplay playsinline></audio>
 
+    <script>
+      // Register the service worker for installable/offline PWA support.
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () =>
+          navigator.serviceWorker.register("/sw.js").catch(() => {})
+        );
+      }
+    </script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
