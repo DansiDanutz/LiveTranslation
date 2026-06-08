@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiveTranslation — real-time speech translation</title>
+    <meta
+      name="description"
+      content="Real-time speech-to-speech translation powered by gpt-realtime-translate."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- ============================ AUTH VIEW ============================ -->
+    <section id="auth-view" class="auth" hidden>
+      <div class="auth__card card">
+        <div class="brand__mark auth__mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+            <path d="M12 1v22M5 5l14 14M19 5L5 19" opacity="0" />
+            <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <h1 class="auth__title">LiveTranslation</h1>
+        <p class="auth__subtitle">
+          Speak in one language, hear it in another — instantly. Powered by
+          <code id="auth-model">gpt-realtime-translate</code>.
+        </p>
+        <button id="google-signin" class="btn-google">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.24 1.4-1.7 4.1-5.5 4.1-3.3 0-6-2.7-6-6.1s2.7-6.1 6-6.1c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.7 3.2 14.6 2.2 12 2.2 6.9 2.2 2.8 6.3 2.8 11.9S6.9 21.8 12 21.8c5.6 0 9.3-3.9 9.3-9.5 0-.6-.1-1.1-.2-1.6H12z" />
+          </svg>
+          Continue with Google
+        </button>
+        <p class="auth__fineprint">Free to use. We only use your name and email to sign you in.</p>
+      </div>
+    </section>
+
+    <!-- ============================ APP VIEW ============================ -->
+    <main id="app-view" class="app" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand__mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+              <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand__title">LiveTranslation</div>
+            <div class="brand__subtitle">Real-time speech translation</div>
+          </div>
+        </div>
+
+        <div class="topbar__right">
+          <span id="status-pill" class="pill" data-state="idle">
+            <span class="pill__dot"></span>
+            <span id="status-text">Idle</span>
+          </span>
+          <div id="user-chip" class="user-chip">
+            <span id="user-avatar" class="user-chip__avatar"></span>
+            <span id="user-name" class="user-chip__name">Guest</span>
+            <button id="sign-out" class="user-chip__signout" hidden title="Sign out">⎋</button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Language controls -->
+      <section class="card controls">
+        <div class="field">
+          <label class="field__label" for="source-lang">From (auto-detected)</label>
+          <select id="source-lang" class="select"></select>
+        </div>
+        <button id="swap-lang" class="swap" title="Swap languages" aria-label="Swap languages">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 4l-4 4 4 4M3 8h14M17 20l4-4-4-4M21 16H7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <div class="field">
+          <label class="field__label" for="target-lang">To</label>
+          <select id="target-lang" class="select"></select>
+        </div>
+      </section>
+
+      <!-- Live captions -->
+      <section class="stage">
+        <div class="card caption caption--source">
+          <div class="caption__head"><span class="tag"></span> You said</div>
+          <div id="source-caption" class="caption__body" aria-live="polite">
+            <span class="caption__placeholder">Your speech appears here…</span>
+          </div>
+        </div>
+        <div class="card caption caption--target">
+          <div class="caption__head"><span class="tag"></span> Translation</div>
+          <div id="target-caption" class="caption__body" aria-live="polite">
+            <span class="caption__placeholder">Translation appears here…</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Mic + toolbar -->
+      <section class="dock">
+        <div class="dock__meter">
+          <div id="level-bar" class="dock__meter-bar"></div>
+        </div>
+        <button id="mic" class="mic" data-active="false" aria-label="Start or stop translating">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 11a7 7 0 0014 0M12 18v4" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div id="mic-hint" class="dock__hint">Tap to start translating</div>
+
+        <div class="toolbar">
+          <button id="mute-audio" class="chip" data-muted="false">🔊 Audio on</button>
+          <label class="chip chip--range">
+            🔈
+            <input id="volume" type="range" min="0" max="1" step="0.05" value="1" />
+          </label>
+          <span class="chip chip--stat">⏱ <span id="timer">00:00</span></span>
+          <span class="chip chip--stat">💸 <span id="cost">$0.000</span></span>
+          <button id="copy-transcript" class="chip">📋 Copy</button>
+          <button id="download-transcript" class="chip">⬇ Save .txt</button>
+        </div>
+      </section>
+
+      <footer class="meta">
+        <span>Model: <code id="model-tag">gpt-realtime-translate</code></span>
+        <span>Price: <code id="price-tag">$0.034/min</code></span>
+        <span>70+ input → 13 output languages</span>
+      </footer>
+    </main>
+
+    <div id="toast" class="toast" data-show="false"></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
