@@ -30,6 +30,13 @@ const els = {
   sourceSelect: $("#source-lang"),
   targetSelect: $("#target-lang"),
   swapBtn: $("#swap-lang"),
+  // Conversation mode
+  modeTranslate: $("#mode-translate"),
+  modeConversation: $("#mode-conversation"),
+  personA: $("#person-a"),
+  personB: $("#person-b"),
+  convAb: $("#conv-ab"),
+  convBa: $("#conv-ba"),
   mic: $("#mic"),
   micHint: $("#mic-hint"),
   statusPill: $("#status-pill"),
@@ -66,6 +73,7 @@ const els = {
   summaryBody: $("#summary-body"),
   summaryClose: $("#summary-close"),
   summaryCopy: $("#summary-copy"),
+  summaryPdf: $("#summary-pdf"),
   summarizeAll: $("#summarize-all"),
   overallSummary: $("#overall-summary"),
   summaryLang: $("#summary-lang"),
@@ -107,6 +115,11 @@ let timerInterval = null;
 let pricePerMinute = 0.034;
 let sourceText = "";
 let targetText = "";
+let sessionTarget = null; // target language code of the in-progress session
+let activeDirection = null; // "AtoB" | "BtoA" in conversation mode
+let currentUserId = null; // Supabase user id (for cloud sync)
+let cloudAvailable = true; // flips false if the sessions table isn't set up
+let lastSession = null; // last completed/viewed session (for PDF export)
 
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
@@ -153,6 +166,8 @@ function showAuthView() {
 function enterApp(user) {
   els.authView.hidden = true;
   els.appView.hidden = false;
+  currentUserId = user.id && user.id !== "demo" ? user.id : null;
+  cloudSyncDown(); // pull any sessions saved on other devices
   const name = user.user_metadata?.full_name || user.email || "Guest";
   const avatar = user.user_metadata?.avatar_url;
   els.userName.textContent = name;
@@ -181,18 +196,51 @@ function populateLanguages() {
   }
   els.sourceSelect.value = "auto";
   els.targetSelect.value = "es";
+
+  // Conversation: both sides must be output-capable languages.
+  for (const sel of [els.personA, els.personB]) {
+    for (const lang of OUTPUT_LANGUAGES) {
+      const opt = document.createElement("option");
+      opt.value = lang.code;
+      opt.textContent = `${lang.flag}  ${lang.name}`;
+      sel.append(opt);
+    }
+  }
+  els.personA.value = "en";
+  els.personB.value = "es";
+}
+
+// The target language for the next/in-progress session, per current mode.
+function currentTarget() {
+  if (els.appView.getAttribute("data-mode") === "conversation") {
+    return activeDirection === "BtoA" ? els.personA.value : els.personB.value;
+  }
+  return els.targetSelect.value;
 }
 
 function restorePreferences() {
   const saved = JSON.parse(localStorage.getItem("lt-prefs") || "{}");
   if (saved.source) els.sourceSelect.value = saved.source;
   if (saved.target) els.targetSelect.value = saved.target;
+  if (saved.personA) els.personA.value = saved.personA;
+  if (saved.personB) els.personB.value = saved.personB;
+  els.appView.setAttribute("data-mode", saved.mode === "conversation" ? "conversation" : "translate");
+  if (saved.mode === "conversation") {
+    els.modeConversation.classList.add("is-active");
+    els.modeTranslate.classList.remove("is-active");
+  }
 }
 
 function savePreferences() {
   localStorage.setItem(
     "lt-prefs",
-    JSON.stringify({ source: els.sourceSelect.value, target: els.targetSelect.value })
+    JSON.stringify({
+      source: els.sourceSelect.value,
+      target: els.targetSelect.value,
+      personA: els.personA.value,
+      personB: els.personB.value,
+      mode: els.appView.getAttribute("data-mode"),
+    })
   );
 }
 
@@ -223,6 +271,16 @@ function wireEvents() {
     if (listening) restartSession();
   });
   els.sourceSelect.addEventListener("change", savePreferences);
+
+  // Mode toggle
+  els.modeTranslate.addEventListener("click", () => setMode("translate"));
+  els.modeConversation.addEventListener("click", () => setMode("conversation"));
+
+  // Conversation direction buttons (push-to-talk per person)
+  els.personA.addEventListener("change", savePreferences);
+  els.personB.addEventListener("change", savePreferences);
+  els.convAb.addEventListener("click", () => toggleDirection("AtoB"));
+  els.convBa.addEventListener("click", () => toggleDirection("BtoA"));
 
   els.muteAudio.addEventListener("click", () => {
     const muted = els.muteAudio.getAttribute("data-muted") === "true";
@@ -271,6 +329,17 @@ function wireEvents() {
       () => showToast("Could not copy")
     );
   });
+  els.summaryPdf.addEventListener("click", () =>
+    exportPdf(
+      lastSession || {
+        target: sessionTarget || els.targetSelect.value,
+        sourceText,
+        targetText,
+        summary: els.summaryBody.textContent,
+        ts: Date.now(),
+      }
+    )
+  );
   els.summarizeAll.addEventListener("click", summarizeAllSessions);
 
   els.summaryLang.addEventListener("change", () =>
@@ -284,7 +353,11 @@ function wireEvents() {
     if (e.key === "Escape" && !els.sideMenu.hidden) closeMenu();
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
-      listening ? stopListening() : startListening();
+      if (els.appView.getAttribute("data-mode") === "conversation") {
+        toggleDirection(activeDirection || "AtoB");
+      } else {
+        listening ? stopListening() : startListening();
+      }
     }
   });
 }
@@ -352,6 +425,36 @@ async function refreshMicDevices() {
   }
 }
 
+async function setMode(mode) {
+  if (listening) await stopListening();
+  els.appView.setAttribute("data-mode", mode);
+  els.modeTranslate.classList.toggle("is-active", mode === "translate");
+  els.modeConversation.classList.toggle("is-active", mode === "conversation");
+  els.micHint.textContent =
+    mode === "conversation" ? "Tap a person to translate what they say" : "Tap to start translating";
+  savePreferences();
+}
+
+async function toggleDirection(dir) {
+  // Tapping the active direction stops; tapping the other switches.
+  if (listening && activeDirection === dir) {
+    await stopListening();
+    return;
+  }
+  if (listening) await stopListening();
+  activeDirection = dir;
+  await startListening();
+}
+
+function updateConvButtons() {
+  const a = listening && activeDirection === "AtoB";
+  const b = listening && activeDirection === "BtoA";
+  els.convAb.setAttribute("data-active", String(a));
+  els.convBa.setAttribute("data-active", String(b));
+  els.convAb.querySelector(".conv-mic__label").textContent = a ? "Listening… tap to stop" : "Tap & speak";
+  els.convBa.querySelector(".conv-mic__label").textContent = b ? "Listening… tap to stop" : "Tap & speak";
+}
+
 async function restartSession() {
   appendCaption(
     els.targetCaption,
@@ -370,9 +473,10 @@ async function startListening() {
   }
   try {
     setStatus("connecting", "Connecting…");
+    sessionTarget = currentTarget();
 
     // 1) Mint a short-lived token for this translation session.
-    const token = await mintToken(els.targetSelect.value);
+    const token = await mintToken(sessionTarget);
 
     // 2) Capture mic audio (from the chosen input device, if any).
     const deviceId = localStorage.getItem(DEVICE_KEY) || "";
@@ -420,8 +524,12 @@ async function startListening() {
     startLevelMeter(localStream);
     listening = true;
     els.mic.setAttribute("data-active", "true");
-    els.micHint.textContent = "Listening — speak naturally. Tap to stop.";
+    els.micHint.textContent =
+      els.appView.getAttribute("data-mode") === "conversation"
+        ? `Listening — translating into ${outputLanguageName(sessionTarget)}. Tap to stop.`
+        : "Listening — speak naturally. Tap to stop.";
     els.remoteAudio.volume = Number(els.volume.value);
+    updateConvButtons();
     startTimer();
     clearCaptions();
   } catch (err) {
@@ -446,7 +554,7 @@ async function stopListening(save = true) {
     if (sourceText.trim() || targetText.trim()) {
       savedEntry = saveHistory({
         ts: Date.now(),
-        target: els.targetSelect.value,
+        target: sessionTarget || els.targetSelect.value,
         seconds,
         sourceText: sourceText.trim(),
         targetText: targetText.trim(),
@@ -470,9 +578,14 @@ async function stopListening(save = true) {
   els.remoteAudio.srcObject = null;
   pc = dataChannel = localStream = null;
   setStatus("idle", "Idle");
+  activeDirection = null;
+  updateConvButtons();
 
-  // Auto-summarize the session that just ended.
-  if (savedEntry) generateSessionSummary(savedEntry);
+  if (savedEntry) {
+    lastSession = savedEntry;
+    cloudSyncUp(savedEntry);
+    generateSessionSummary(savedEntry); // auto-summarize the session that just ended
+  }
 }
 
 async function mintToken(language) {
@@ -635,6 +748,7 @@ function openMenu() {
   renderHistory();
   renderBalance();
   els.sideMenu.hidden = false;
+  cloudSyncDown(); // refresh from cloud if available
 }
 function closeMenu() {
   els.sideMenu.hidden = true;
@@ -686,6 +800,7 @@ function renderHistory() {
 
 function viewHistoryItem(item) {
   closeMenu();
+  lastSession = item;
   els.targetSelect.value = item.target;
   els.sourceCaption.innerHTML = "";
   els.targetCaption.innerHTML = "";
@@ -741,6 +856,8 @@ async function generateSessionSummary(entry) {
   try {
     const summary = await summarize(text, "session", summaryLanguage());
     patchHistory(entry.id, { summary });
+    lastSession = { ...entry, summary };
+    cloudSyncUp(lastSession);
     showSummary(summary);
   } catch (err) {
     els.summaryBody.textContent = "Could not summarize: " + err.message;
@@ -837,6 +954,120 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// ----- Cloud sync (optional; activates once the sessions table exists) -----
+function cloudReady() {
+  return cloudAvailable && currentUserId && config?.supabaseUrl && config?.supabaseAnonKey;
+}
+
+async function cloudHeaders() {
+  const token = await getAccessToken();
+  return {
+    apikey: config.supabaseAnonKey,
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function cloudSyncUp(entry) {
+  if (!cloudReady()) return;
+  try {
+    const res = await fetch(`${config.supabaseUrl}/rest/v1/sessions?on_conflict=user_id,client_id`, {
+      method: "POST",
+      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        user_id: currentUserId,
+        client_id: entry.id,
+        source_text: entry.sourceText || "",
+        target_text: entry.targetText || "",
+        summary: entry.summary || null,
+        target_language: entry.target,
+        duration_seconds: entry.seconds || 0,
+        created_at: new Date(entry.ts).toISOString(),
+      }),
+    });
+    if (res.status === 404) cloudAvailable = false;
+  } catch {
+    /* offline — local history still holds it */
+  }
+}
+
+async function cloudSyncDown() {
+  if (!cloudReady()) return;
+  try {
+    const res = await fetch(
+      `${config.supabaseUrl}/rest/v1/sessions?select=*&order=created_at.desc&limit=100`,
+      { headers: await cloudHeaders() }
+    );
+    if (res.status === 404) {
+      cloudAvailable = false;
+      return;
+    }
+    if (!res.ok) return;
+    mergeCloudRows(await res.json());
+  } catch {
+    /* ignore */
+  }
+}
+
+function mergeCloudRows(rows) {
+  const byId = new Map(loadHistory().map((i) => [i.id, i]));
+  for (const r of rows) {
+    const id = r.client_id || String(new Date(r.created_at).getTime());
+    if (!byId.has(id)) {
+      byId.set(id, {
+        id,
+        ts: new Date(r.created_at).getTime(),
+        target: r.target_language,
+        seconds: r.duration_seconds || 0,
+        sourceText: r.source_text || "",
+        targetText: r.target_text || "",
+        summary: r.summary || undefined,
+      });
+    } else if (r.summary && !byId.get(id).summary) {
+      byId.get(id).summary = r.summary;
+    }
+  }
+  const merged = Array.from(byId.values()).sort((a, b) => b.ts - a.ts).slice(0, 50);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+  if (!els.sideMenu.hidden) renderHistory();
+}
+
+// ----- PDF export (via the browser's print-to-PDF) -------------------------
+function exportPdf(s) {
+  if (!s || (!s.targetText && !s.sourceText && !s.summary)) {
+    showToast("Nothing to export yet.");
+    return;
+  }
+  const w = window.open("", "_blank");
+  if (!w) {
+    showToast("Allow pop-ups to export a PDF.");
+    return;
+  }
+  const esc = (x) => escapeHtml(x || "");
+  const when = s.ts ? new Date(s.ts).toLocaleString() : new Date().toLocaleString();
+  w.document.write(
+    `<!doctype html><html><head><meta charset="utf-8"><title>LiveTranslation — ${esc(
+      outputLanguageName(s.target)
+    )}</title><style>
+      body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:40px auto;padding:0 24px;color:#1a2238;line-height:1.6}
+      h1{font-size:22px;margin:0 0 2px}.meta{color:#666;font-size:13px;margin-bottom:22px}
+      h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#6d7cff;margin:22px 0 6px}
+      .box{white-space:pre-wrap;background:#f5f6fb;border:1px solid #e3e7f3;border-radius:10px;padding:14px}
+      .sum{white-space:pre-wrap;background:#eef7f4;border:1px solid #cfe8df;border-radius:10px;padding:14px}
+      footer{margin-top:30px;color:#999;font-size:12px}
+    </style></head><body>
+      <h1>🎙️ LiveTranslation</h1>
+      <div class="meta">Translation language: ${esc(outputLanguageName(s.target))} · ${esc(when)}</div>
+      ${s.summary ? `<h2>Summary</h2><div class="sum">${esc(s.summary)}</div>` : ""}
+      <h2>Spoken</h2><div class="box">${esc(s.sourceText) || "—"}</div>
+      <h2>Translation</h2><div class="box">${esc(s.targetText) || "—"}</div>
+      <footer>Generated by LiveTranslation</footer>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  );
+  w.document.close();
 }
 
 // ----- Toast ---------------------------------------------------------------

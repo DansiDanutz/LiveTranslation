@@ -95,6 +95,10 @@ That's it — open your `*.vercel.app` URL and start translating.
 ## Features
 
 - One-tap mic, **spacebar** to toggle listening
+- **Two-way conversation mode** — two people, two languages, push-to-talk per side
+- **AI session summaries** on stop + **"Summary of all"** (language selectable, default Romanian)
+- **OpenAI balance tracker** (estimate) with low-balance warnings + a top-up link
+- **PDF export** of a session (transcript + summary) and optional **cloud sync** of history
 - Source + target **live captions** (large, readable, scrollable)
 - **Presentation mode** — fullscreen captions for translating to a room
 - **Adjustable caption size** (A− / A+)
@@ -133,6 +137,15 @@ LiveTranslation/
 ```
 
 ---
+
+## Cloud sync (optional)
+
+History + summaries are stored on-device by default. To sync them across a
+user's devices, create the `sessions` table once: Supabase → **SQL Editor** →
+paste [`supabase/schema.sql`](supabase/schema.sql) → **Run** (or `supabase db
+push`). The app auto-detects the table and starts syncing each signed-in user's
+sessions, protected by Row-Level Security (users only see their own). The
+summary model is configurable via `SUMMARY_MODEL` (default `gpt-4o-mini`).
 
 ## Pricing
 

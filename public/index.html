@@ -86,8 +86,14 @@
         </div>
       </header>
 
-      <!-- Language controls -->
-      <section class="card controls">
+      <!-- Mode toggle -->
+      <div class="mode-toggle" role="tablist">
+        <button id="mode-translate" class="mode-toggle__btn is-active" role="tab">💬 Translate</button>
+        <button id="mode-conversation" class="mode-toggle__btn" role="tab">🔁 Conversation</button>
+      </div>
+
+      <!-- Language controls (Translate mode) -->
+      <section class="card controls show-translate">
         <div class="field">
           <label class="field__label" for="source-lang">From (auto-detected)</label>
           <select id="source-lang" class="select"></select>
@@ -100,6 +106,19 @@
         <div class="field">
           <label class="field__label" for="target-lang">To</label>
           <select id="target-lang" class="select"></select>
+        </div>
+      </section>
+
+      <!-- Conversation controls (two people, two languages) -->
+      <section class="card controls show-conversation">
+        <div class="field">
+          <label class="field__label" for="person-a">🅰️ Person A speaks</label>
+          <select id="person-a" class="select"></select>
+        </div>
+        <div class="conv-arrow">⟷</div>
+        <div class="field">
+          <label class="field__label" for="person-b">🅱️ Person B speaks</label>
+          <select id="person-b" class="select"></select>
         </div>
       </section>
 
@@ -129,12 +148,25 @@
         <div class="dock__meter">
           <div id="level-bar" class="dock__meter-bar"></div>
         </div>
-        <button id="mic" class="mic" data-active="false" aria-label="Start or stop translating">
+        <button id="mic" class="mic show-translate" data-active="false" aria-label="Start or stop translating">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="2" width="6" height="12" rx="3" />
             <path d="M5 11a7 7 0 0014 0M12 18v4" stroke-linecap="round" />
           </svg>
         </button>
+
+        <!-- Conversation: one push-to-talk per person/direction -->
+        <div class="conv-mics show-conversation">
+          <button id="conv-ab" class="conv-mic" data-active="false">
+            <span class="conv-mic__who">🅰️ → 🅱️</span>
+            <span class="conv-mic__label">Tap &amp; speak</span>
+          </button>
+          <button id="conv-ba" class="conv-mic" data-active="false">
+            <span class="conv-mic__who">🅱️ → 🅰️</span>
+            <span class="conv-mic__label">Tap &amp; speak</span>
+          </button>
+        </div>
+
         <div id="mic-hint" class="dock__hint">Tap to start translating</div>
 
         <div class="toolbar">
@@ -164,6 +196,7 @@
         <div class="summary-card__head">
           <span>📝 Session summary</span>
           <div class="summary-card__actions">
+            <button id="summary-pdf" class="chip chip--mini">🖨️ PDF</button>
             <button id="summary-copy" class="chip chip--mini">📋 Copy</button>
             <button id="summary-close" class="icon-btn" aria-label="Close summary">✕</button>
           </div>
