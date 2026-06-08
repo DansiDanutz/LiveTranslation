@@ -1,10 +1,14 @@
 // auth.js
-// Thin wrapper around Supabase Auth for Google sign-in. The Supabase SDK is
-// loaded *lazily* (dynamic import) only when sign-in is actually configured, so
-// a CDN hiccup can never blank out the app — and demo mode needs no network SDK.
+// Dependency-free Supabase Google sign-in using the implicit OAuth redirect
+// flow. No external SDK / CDN is loaded at runtime — we just redirect to
+// Supabase's authorize endpoint and read the returned session from the URL.
+// This is far more robust than loading the JS SDK from a CDN.
 
-let supabase = null;
+let SUPABASE_URL = "";
+let SUPABASE_ANON_KEY = "";
 let authRequired = false;
+const STORE_KEY = "lt-supabase-session";
+let pendingError = null;
 
 export async function initAuth() {
   let cfg;
@@ -14,52 +18,126 @@ export async function initAuth() {
     cfg = { authRequired: false, model: "gpt-realtime-translate", keyConfigured: false };
   }
   authRequired = Boolean(cfg.authRequired);
+  SUPABASE_URL = (cfg.supabaseUrl || "").replace(/\/$/, "");
+  SUPABASE_ANON_KEY = cfg.supabaseAnonKey || "";
 
-  if (authRequired) {
-    try {
-      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-      supabase = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-      });
-    } catch (err) {
-      // If the SDK can't load, fall back to demo mode rather than breaking the app.
-      console.error("Supabase SDK failed to load; falling back to demo mode.", err);
-      authRequired = false;
-    }
-  }
+  if (authRequired) captureSessionFromUrl();
   return cfg;
+}
+
+// When returning from Google, Supabase appends the session to the URL hash
+// (implicit flow): #access_token=...&refresh_token=...&expires_in=...
+function captureSessionFromUrl() {
+  const hash = window.location.hash || "";
+  if (hash.includes("access_token=")) {
+    const p = new URLSearchParams(hash.slice(1));
+    const access_token = p.get("access_token");
+    const refresh_token = p.get("refresh_token");
+    const expires_in = parseInt(p.get("expires_in") || "3600", 10);
+    if (access_token) {
+      saveSession({ access_token, refresh_token, expires_at: Date.now() + expires_in * 1000 });
+    }
+    cleanUrl();
+  } else if (hash.includes("error")) {
+    const p = new URLSearchParams(hash.slice(1));
+    pendingError = p.get("error_description") || p.get("error") || "Sign-in failed.";
+    cleanUrl();
+  }
+}
+
+function cleanUrl() {
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
+function saveSession(s) {
+  localStorage.setItem(STORE_KEY, JSON.stringify(s));
+}
+function getSession() {
+  try {
+    return JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+  } catch {
+    return null;
+  }
 }
 
 export function isAuthRequired() {
   return authRequired;
 }
 
+export function consumeAuthError() {
+  const e = pendingError;
+  pendingError = null;
+  return e;
+}
+
 export async function getUser() {
   if (!authRequired) return { id: "demo", email: "Guest", user_metadata: {} };
-  const { data } = await supabase.auth.getUser();
-  return data?.user || null;
+  const token = await getAccessToken();
+  if (!token) return null;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) {
+      localStorage.removeItem(STORE_KEY);
+      return null;
+    }
+    return await r.json();
+  } catch {
+    return null;
+  }
 }
 
 export async function getAccessToken() {
   if (!authRequired) return "demo";
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.access_token || null;
+  let s = getSession();
+  if (!s?.access_token) return null;
+  // Refresh if close to expiry and we have a refresh token.
+  if (s.refresh_token && s.expires_at && Date.now() > s.expires_at - 60000) {
+    try {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: s.refresh_token }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        s = {
+          access_token: j.access_token,
+          refresh_token: j.refresh_token || s.refresh_token,
+          expires_at: Date.now() + (j.expires_in || 3600) * 1000,
+        };
+        saveSession(s);
+      }
+    } catch {
+      /* keep existing token */
+    }
+  }
+  return s.access_token;
 }
 
-export async function signInWithGoogle() {
+export function signInWithGoogle() {
   if (!authRequired) return;
-  await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: window.location.origin },
-  });
+  const redirectTo = window.location.origin;
+  window.location.href =
+    `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`;
 }
 
 export async function signOut() {
   if (!authRequired) return;
-  await supabase.auth.signOut();
+  const s = getSession();
+  localStorage.removeItem(STORE_KEY);
+  if (s?.access_token) {
+    try {
+      await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${s.access_token}` },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
-export function onAuthChange(callback) {
-  if (!authRequired) return;
-  supabase.auth.onAuthStateChange((_event, session) => callback(session?.user || null));
-}
+// Redirect flow needs no realtime listener — the session is captured on load.
+export function onAuthChange() {}
