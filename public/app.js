@@ -1,6 +1,8 @@
 // app.js
-// Orchestrates the LiveTranslation experience: auth gating, mic capture,
-// streaming to the server relay, and rendering translated audio + captions.
+// LiveTranslation over WebRTC. The browser mints a short-lived token from our
+// serverless /api/token endpoint, then connects directly to OpenAI's
+// translation endpoint. Translated audio arrives as a media track; source and
+// target transcripts arrive over the "oai-events" data channel.
 
 import { OUTPUT_LANGUAGES, INPUT_LANGUAGES, outputLanguageName } from "./languages.js";
 import {
@@ -13,7 +15,7 @@ import {
   onAuthChange,
 } from "./auth.js";
 
-const PLAYBACK_RATE = 24000; // model outputs 24 kHz PCM16
+const CALLS_URL = "https://api.openai.com/v1/realtime/translations/calls";
 
 // ----- DOM -----------------------------------------------------------------
 const $ = (sel) => document.querySelector(sel);
@@ -21,7 +23,6 @@ const els = {
   authView: $("#auth-view"),
   appView: $("#app-view"),
   googleBtn: $("#google-signin"),
-  userChip: $("#user-chip"),
   userName: $("#user-name"),
   userAvatar: $("#user-avatar"),
   signOutBtn: $("#sign-out"),
@@ -44,15 +45,17 @@ const els = {
   toast: $("#toast"),
   modelTag: $("#model-tag"),
   priceTag: $("#price-tag"),
+  remoteAudio: $("#tts"),
 };
 
 // ----- State ---------------------------------------------------------------
 let config = null;
-let ws = null;
-let audioCtx = null;
-let captureNode = null;
-let playbackNode = null;
-let mediaStream = null;
+let pc = null;
+let dataChannel = null;
+let localStream = null;
+let analyser = null;
+let levelCtx = null;
+let levelRAF = null;
 let listening = false;
 let startTime = 0;
 let timerInterval = null;
@@ -153,22 +156,19 @@ function wireEvents() {
   els.mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
 
   els.swapBtn.addEventListener("click", () => {
-    // Swap is only meaningful when source is a concrete output-capable language.
     const s = els.sourceSelect.value;
     const t = els.targetSelect.value;
-    if (OUTPUT_LANGUAGES.some((l) => l.code === s)) {
-      els.targetSelect.value = s;
-    }
-    if (INPUT_LANGUAGES.some((l) => l.code === t)) {
-      els.sourceSelect.value = t;
-    }
+    if (OUTPUT_LANGUAGES.some((l) => l.code === s)) els.targetSelect.value = s;
+    if (INPUT_LANGUAGES.some((l) => l.code === t)) els.sourceSelect.value = t;
     savePreferences();
-    if (listening) updateLanguage();
+    if (listening) restartSession();
   });
 
+  // Target language is fixed at token mint time, so changing it restarts the
+  // session with a fresh token.
   els.targetSelect.addEventListener("change", () => {
     savePreferences();
-    if (listening) updateLanguage();
+    if (listening) restartSession();
   });
   els.sourceSelect.addEventListener("change", savePreferences);
 
@@ -176,17 +176,16 @@ function wireEvents() {
     const muted = els.muteAudio.getAttribute("data-muted") === "true";
     els.muteAudio.setAttribute("data-muted", String(!muted));
     els.muteAudio.textContent = !muted ? "🔇 Audio off" : "🔊 Audio on";
-    playbackNode?.port.postMessage({ type: "mute", value: !muted });
+    els.remoteAudio.muted = !muted;
   });
 
   els.volume.addEventListener("input", () => {
-    if (audioCtx && playbackGain) playbackGain.gain.value = Number(els.volume.value);
+    els.remoteAudio.volume = Number(els.volume.value);
   });
 
   els.copyBtn.addEventListener("click", copyTranscript);
   els.downloadBtn.addEventListener("click", downloadTranscript);
 
-  // Spacebar toggles listening (when not typing in a control).
   document.addEventListener("keydown", (e) => {
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
@@ -195,14 +194,17 @@ function wireEvents() {
   });
 }
 
-function updateLanguage() {
-  send({ type: "set_language", language: els.targetSelect.value });
-  appendCaption(els.targetCaption, `\n— now translating to ${outputLanguageName(els.targetSelect.value)} —\n`, true);
+async function restartSession() {
+  appendCaption(
+    els.targetCaption,
+    `\n— reconnecting to translate into ${outputLanguageName(els.targetSelect.value)} —\n`,
+    true
+  );
+  await stopListening();
+  await startListening();
 }
 
-// ----- Start / stop --------------------------------------------------------
-let playbackGain = null;
-
+// ----- Start / stop (WebRTC) -----------------------------------------------
 async function startListening() {
   if (!config.keyConfigured) {
     showToast("Translation disabled: server has no OPENAI_API_KEY.");
@@ -210,111 +212,106 @@ async function startListening() {
   }
   try {
     setStatus("connecting", "Connecting…");
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+
+    // 1) Mint a short-lived token for this translation session.
+    const token = await mintToken(els.targetSelect.value);
+
+    // 2) Capture mic audio.
+    localStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
 
-    // Pin the context to 24 kHz so capture + playback match the model's
-    // documented 24 kHz PCM16 format (no resampling artifacts).
-    audioCtx = new AudioContext({ sampleRate: PLAYBACK_RATE });
-    await audioCtx.audioWorklet.addModule("/capture-worklet.js");
-    await audioCtx.audioWorklet.addModule("/playback-worklet.js");
+    // 3) Establish the peer connection.
+    pc = new RTCPeerConnection();
 
-    // Capture chain: mic -> capture-processor (-> WS)
-    const micSource = audioCtx.createMediaStreamSource(mediaStream);
-    captureNode = new AudioWorkletNode(audioCtx, "capture-processor");
-    captureNode.port.onmessage = (e) => {
-      if (e.data.type === "audio") {
-        updateLevel(e.data.level);
-        const b64 = base64FromBuffer(e.data.pcm);
-        send({ type: "audio", audio: b64 });
+    // Translated audio arrives as a remote media track — play it directly.
+    pc.ontrack = (e) => {
+      els.remoteAudio.srcObject = e.streams[0];
+    };
+
+    pc.addTrack(localStream.getAudioTracks()[0], localStream);
+
+    // Transcript events flow over this data channel.
+    dataChannel = pc.createDataChannel("oai-events");
+    dataChannel.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    dataChannel.onopen = () => setStatus("listening", "Listening");
+
+    pc.onconnectionstatechange = () => {
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState) && listening) {
+        setStatus("error", "Disconnected");
       }
     };
-    micSource.connect(captureNode);
 
-    // Playback chain: playback-processor -> gain -> speakers
-    playbackNode = new AudioWorkletNode(audioCtx, "playback-processor");
-    playbackGain = audioCtx.createGain();
-    playbackGain.gain.value = Number(els.volume.value);
-    playbackNode.connect(playbackGain).connect(audioCtx.destination);
+    // 4) SDP offer / answer handshake with the documented calls endpoint.
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
 
-    await openSocket();
+    const sdpRes = await fetch(CALLS_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/sdp" },
+      body: offer.sdp,
+    });
+    if (!sdpRes.ok) throw new Error(`Translation endpoint refused the call (${sdpRes.status}).`);
+    const answer = { type: "answer", sdp: await sdpRes.text() };
+    await pc.setRemoteDescription(answer);
 
+    // 5) UI + mic level meter.
+    startLevelMeter(localStream);
     listening = true;
     els.mic.setAttribute("data-active", "true");
     els.micHint.textContent = "Listening — speak naturally. Tap to stop.";
+    els.remoteAudio.volume = Number(els.volume.value);
     startTimer();
     clearCaptions();
   } catch (err) {
     console.error(err);
-    setStatus("error", "Mic blocked");
+    setStatus("error", "Error");
     showToast(
       err.name === "NotAllowedError"
         ? "Microphone permission denied. Allow mic access and try again."
-        : "Could not start audio: " + err.message
+        : err.message || "Could not start translation."
     );
     await stopListening();
   }
 }
 
 async function stopListening() {
-  if (ws && ws.readyState === WebSocket.OPEN) send({ type: "stop" });
   listening = false;
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";
   stopTimer();
+  stopLevelMeter();
   updateLevel(0);
 
-  captureNode?.disconnect();
-  playbackNode?.disconnect();
-  mediaStream?.getTracks().forEach((t) => t.stop());
-  if (audioCtx && audioCtx.state !== "closed") await audioCtx.close();
-  audioCtx = null;
-  captureNode = playbackNode = mediaStream = null;
-  if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+  try {
+    dataChannel?.close();
+  } catch {}
+  try {
+    pc?.close();
+  } catch {}
+  localStream?.getTracks().forEach((t) => t.stop());
+  els.remoteAudio.srcObject = null;
+  pc = dataChannel = localStream = null;
+  setStatus("idle", "Idle");
 }
 
-// ----- WebSocket relay -----------------------------------------------------
-function openSocket() {
-  return new Promise(async (resolve, reject) => {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws/translate`);
-
-    ws.onopen = async () => {
-      const accessToken = await getAccessToken();
-      if (!accessToken) {
-        showToast("Please sign in again.");
-        reject(new Error("no token"));
-        return;
-      }
-      send({
-        type: "start",
-        accessToken,
-        language: els.targetSelect.value,
-        transcribeSource: true,
-      });
-      resolve();
-    };
-
-    ws.onmessage = (e) => handleServerEvent(JSON.parse(e.data));
-    ws.onerror = () => setStatus("error", "Connection error");
-    ws.onclose = () => {
-      if (listening) setStatus("closed", "Disconnected");
-    };
+async function mintToken(language) {
+  const accessToken = await getAccessToken();
+  const res = await fetch("/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language, accessToken }),
   });
+  const data = await res.json();
+  if (!res.ok || !data.value) {
+    throw new Error(data.error || "Could not start a translation session.");
+  }
+  return data.value;
 }
 
-function handleServerEvent(evt) {
+// ----- Events --------------------------------------------------------------
+function handleEvent(evt) {
   switch (evt.type) {
-    case "status":
-      if (evt.state === "connected") setStatus("listening", "Listening");
-      else if (evt.state === "closed") setStatus("idle", "Idle");
-      break;
-    case "error":
-      setStatus("error", "Error");
-      showToast(evt.message);
-      break;
-    // ---- Documented translation events --------------------------------
     case "session.input_transcript.delta":
       sourceText += evt.delta || "";
       appendCaption(els.sourceCaption, evt.delta || "");
@@ -323,62 +320,38 @@ function handleServerEvent(evt) {
       targetText += evt.delta || "";
       appendCaption(els.targetCaption, evt.delta || "");
       break;
-    case "session.output_audio.delta":
-      enqueueAudio(evt.delta);
-      break;
-    case "session.closed":
-      setStatus("idle", "Idle");
+    case "error":
+      showToast(evt.error?.message || "Translation error.");
       break;
   }
 }
 
-function send(payload) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+// ----- Mic level meter -----------------------------------------------------
+function startLevelMeter(stream) {
+  levelCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = levelCtx.createMediaStreamSource(stream);
+  analyser = levelCtx.createAnalyser();
+  analyser.fftSize = 512;
+  src.connect(analyser);
+  const buf = new Uint8Array(analyser.fftSize);
+  const tick = () => {
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    updateLevel(Math.sqrt(sum / buf.length));
+    levelRAF = requestAnimationFrame(tick);
+  };
+  tick();
 }
 
-// ----- Audio helpers -------------------------------------------------------
-function enqueueAudio(base64Pcm16) {
-  if (!playbackNode || !base64Pcm16) return;
-  const bytes = base64ToBytes(base64Pcm16);
-  const pcm16 = new Int16Array(bytes.buffer);
-  let float = new Float32Array(pcm16.length);
-  for (let i = 0; i < pcm16.length; i++) float[i] = pcm16[i] / 32768;
-
-  // If the browser didn't honor the 24 kHz context hint, resample so audio
-  // plays at the correct pitch/speed on every browser.
-  const ctxRate = audioCtx?.sampleRate || PLAYBACK_RATE;
-  if (ctxRate !== PLAYBACK_RATE) float = resample(float, PLAYBACK_RATE, ctxRate);
-
-  playbackNode.port.postMessage({ type: "samples", samples: float.buffer }, [float.buffer]);
-}
-
-function resample(input, fromRate, toRate) {
-  const ratio = toRate / fromRate;
-  const outLength = Math.round(input.length * ratio);
-  const out = new Float32Array(outLength);
-  for (let i = 0; i < outLength; i++) {
-    const srcPos = i / ratio;
-    const idx = Math.floor(srcPos);
-    const frac = srcPos - idx;
-    const a = input[idx] || 0;
-    const b = input[idx + 1] !== undefined ? input[idx + 1] : a;
-    out[i] = a + (b - a) * frac; // linear interpolation
-  }
-  return out;
-}
-
-function base64FromBuffer(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64ToBytes(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+function stopLevelMeter() {
+  if (levelRAF) cancelAnimationFrame(levelRAF);
+  levelRAF = null;
+  if (levelCtx && levelCtx.state !== "closed") levelCtx.close();
+  levelCtx = analyser = null;
 }
 
 // ----- UI helpers ----------------------------------------------------------
@@ -388,8 +361,7 @@ function setStatus(state, text) {
 }
 
 function updateLevel(rms) {
-  const pct = Math.min(100, Math.round(rms * 280));
-  els.level.style.width = pct + "%";
+  els.level.style.width = Math.min(100, Math.round(rms * 320)) + "%";
 }
 
 function appendCaption(node, text, system = false) {
