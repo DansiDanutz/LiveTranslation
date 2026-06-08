@@ -341,9 +341,30 @@ function enqueueAudio(base64Pcm16) {
   if (!playbackNode || !base64Pcm16) return;
   const bytes = base64ToBytes(base64Pcm16);
   const pcm16 = new Int16Array(bytes.buffer);
-  const float = new Float32Array(pcm16.length);
+  let float = new Float32Array(pcm16.length);
   for (let i = 0; i < pcm16.length; i++) float[i] = pcm16[i] / 32768;
+
+  // If the browser didn't honor the 24 kHz context hint, resample so audio
+  // plays at the correct pitch/speed on every browser.
+  const ctxRate = audioCtx?.sampleRate || PLAYBACK_RATE;
+  if (ctxRate !== PLAYBACK_RATE) float = resample(float, PLAYBACK_RATE, ctxRate);
+
   playbackNode.port.postMessage({ type: "samples", samples: float.buffer }, [float.buffer]);
+}
+
+function resample(input, fromRate, toRate) {
+  const ratio = toRate / fromRate;
+  const outLength = Math.round(input.length * ratio);
+  const out = new Float32Array(outLength);
+  for (let i = 0; i < outLength; i++) {
+    const srcPos = i / ratio;
+    const idx = Math.floor(srcPos);
+    const frac = srcPos - idx;
+    const a = input[idx] || 0;
+    const b = input[idx + 1] !== undefined ? input[idx + 1] : a;
+    out[i] = a + (b - a) * frac; // linear interpolation
+  }
+  return out;
 }
 
 function base64FromBuffer(buffer) {
