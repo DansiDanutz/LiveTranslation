@@ -271,6 +271,16 @@
             <div id="overall-summary" class="overall-summary" hidden></div>
           </section>
 
+          <!-- Access control (owner only) -->
+          <section id="admin-section" class="menu__section" hidden>
+            <div class="menu__section-title">Access — allowed people <span class="menu__est">(owner)</span></div>
+            <form id="allow-form" class="ask">
+              <input id="allow-input" class="ask__input" type="email" placeholder="email to allow…" autocomplete="off" />
+              <button class="ask__send" type="submit">Add</button>
+            </form>
+            <div id="allow-list" class="menu__list"></div>
+          </section>
+
           <!-- History -->
           <section class="menu__section">
             <div class="menu__section-title">

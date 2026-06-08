@@ -154,13 +154,18 @@ Because the app spends a real OpenAI key, every API route is guarded server-side
 
 | Env var | Default | Effect |
 |---------|---------|--------|
-| `ALLOWED_EMAILS` | **owner only** | Who may translate/summarize/ask. `*` = anyone signed in; or a comma-separated email list. |
+| `OWNER_EMAIL` | `semebitcoin@gmail.com` | Always allowed; the only admin who manages the in-app allowlist. |
+| `ALLOWED_EMAILS` | none | Extra static allowlist. `*` = anyone signed in; or a comma-separated list. |
 | `MAX_MINUTES_PER_USER_PER_DAY` | `0` (off) | Soft per-user daily cap on translation minutes. |
 | `DAILY_BUDGET_USD` | `0` (off) | Global daily budget stop (needs `SUPABASE_SERVICE_ROLE_KEY` to measure). |
 
-Out of the box only the owner's account can spend; set `ALLOWED_EMAILS` in Vercel
-to open it up or invite others. Listeners on a `/?live=…` link are **read-only**
-and never hit these routes.
+Out of the box **only the owner can spend**. The owner can whitelist others
+**from inside the app** (Menu → **Access**) — run
+[`supabase/allowlist.sql`](supabase/allowlist.sql) once to enable that
+(owner-only writes, enforced by RLS). Listeners on a `/?live=…` link are
+**read-only** and never hit these routes. Responses also send standard security
+headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+`Permissions-Policy`).
 
 ## Pricing
 

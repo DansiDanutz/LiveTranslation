@@ -68,6 +68,11 @@ const els = {
   menuBackdrop: $("#menu-backdrop"),
   historyClear: $("#history-clear"),
   historyList: $("#history-list"),
+  // Owner access control
+  adminSection: $("#admin-section"),
+  allowForm: $("#allow-form"),
+  allowInput: $("#allow-input"),
+  allowList: $("#allow-list"),
   // Summaries
   summaryCard: $("#summary-card"),
   summaryBody: $("#summary-body"),
@@ -132,6 +137,8 @@ let targetText = "";
 let sessionTarget = null; // target language code of the in-progress session
 let activeDirection = null; // "AtoB" | "BtoA" in conversation mode
 let currentUserId = null; // Supabase user id (for cloud sync)
+let currentUserEmail = null;
+let isOwner = false;
 let cloudAvailable = true; // flips false if the sessions table isn't set up
 let lastSession = null; // last completed/viewed session (for PDF export)
 
@@ -189,6 +196,9 @@ function enterApp(user) {
   els.authView.hidden = true;
   els.appView.hidden = false;
   currentUserId = user.id && user.id !== "demo" ? user.id : null;
+  currentUserEmail = (user.email || "").toLowerCase();
+  isOwner = Boolean(config?.ownerEmail) && currentUserEmail === config.ownerEmail;
+  els.adminSection.hidden = !isOwner;
   cloudSyncDown(); // pull any sessions saved on other devices
   const name = user.user_metadata?.full_name || user.email || "Guest";
   const avatar = user.user_metadata?.avatar_url;
@@ -381,6 +391,12 @@ function wireEvents() {
   els.summaryLang.addEventListener("change", () =>
     localStorage.setItem(SUMMARY_LANG_KEY, els.summaryLang.value)
   );
+
+  // Owner access control
+  els.allowForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    addAllowedEmail();
+  });
 
   // Balance
   els.balSet.addEventListener("click", promptSetBalance);
@@ -785,8 +801,79 @@ function patchHistory(id, fields) {
 function openMenu() {
   renderHistory();
   renderBalance();
+  if (isOwner) renderAllowlist();
   els.sideMenu.hidden = false;
   cloudSyncDown(); // refresh from cloud if available
+}
+
+// ----- Owner access control (allowlist management) -------------------------
+async function renderAllowlist() {
+  els.allowList.innerHTML = '<div class="menu__empty">Loading…</div>';
+  try {
+    const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist?select=email&order=created_at.desc`, {
+      headers: { apikey: config.supabaseAnonKey },
+    });
+    if (res.status === 404) {
+      els.allowList.innerHTML =
+        '<div class="menu__empty">Run <code>supabase/allowlist.sql</code> once to enable.</div>';
+      return;
+    }
+    const rows = res.ok ? await res.json() : [];
+    els.allowList.innerHTML = "";
+    const owner = document.createElement("div");
+    owner.className = "history-item";
+    owner.innerHTML = `<div class="history-item__top"><span class="history-item__lang">${escapeHtml(
+      config.ownerEmail
+    )}</span><span class="history-item__meta">owner</span></div>`;
+    els.allowList.append(owner);
+    for (const r of rows) {
+      const row = document.createElement("div");
+      row.className = "history-item";
+      row.innerHTML = `<div class="history-item__top"><span class="history-item__lang">${escapeHtml(
+        r.email
+      )}</span><span class="history-item__meta"><button class="history-item__del" title="Remove">✕</button></span></div>`;
+      row.querySelector(".history-item__del").addEventListener("click", () => removeAllowedEmail(r.email));
+      els.allowList.append(row);
+    }
+  } catch {
+    els.allowList.innerHTML = '<div class="menu__empty">Could not load the list.</div>';
+  }
+}
+
+async function addAllowedEmail() {
+  const email = els.allowInput.value.trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    showToast("Enter a valid email.");
+    return;
+  }
+  try {
+    const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist`, {
+      method: "POST",
+      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ email, added_by: currentUserEmail }),
+    });
+    if (res.status === 404) return showToast("Run supabase/allowlist.sql first.");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    els.allowInput.value = "";
+    showToast("Allowed " + email, true);
+    renderAllowlist();
+  } catch (err) {
+    showToast("Could not add: " + err.message);
+  }
+}
+
+async function removeAllowedEmail(email) {
+  try {
+    const res = await fetch(
+      `${config.supabaseUrl}/rest/v1/app_allowlist?email=eq.${encodeURIComponent(email)}`,
+      { method: "DELETE", headers: await cloudHeaders() }
+    );
+    if (!res.ok && res.status !== 404) throw new Error("HTTP " + res.status);
+    showToast("Removed " + email, true);
+    renderAllowlist();
+  } catch (err) {
+    showToast("Could not remove: " + err.message);
+  }
 }
 function closeMenu() {
   els.sideMenu.hidden = true;
