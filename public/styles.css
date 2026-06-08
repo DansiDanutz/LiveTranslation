@@ -86,6 +86,13 @@ body[data-theme="light"] {
   box-sizing: border-box;
 }
 
+/* The hidden attribute must always win over component display rules
+   (e.g. .auth{display:grid} / .app{display:flex}), otherwise both the login
+   and app views render at once. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
