@@ -13,6 +13,7 @@ import {
   signInWithGoogle,
   signOut,
   onAuthChange,
+  consumeAuthError,
 } from "./auth.js";
 
 const CALLS_URL = "https://api.openai.com/v1/realtime/translations/calls";
@@ -98,6 +99,8 @@ let targetText = "";
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
   }
+  const authErr = consumeAuthError();
+  if (authErr) showToast("Sign-in error: " + authErr);
 
   if (isAuthRequired()) {
     onAuthChange(() => refreshAuthView());

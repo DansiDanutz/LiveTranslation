@@ -1,7 +1,9 @@
-// sw.js — minimal service worker for installable/offline PWA support.
-// Caches the static app shell. API requests are NEVER cached.
+// sw.js — service worker for installable/offline PWA support.
+// NETWORK-FIRST: always prefer fresh content when online (so deploys take
+// effect immediately), falling back to cache only when offline. API requests
+// are never intercepted.
 
-const CACHE = "lt-v1";
+const CACHE = "lt-v3";
 const ASSETS = [
   "/",
   "/index.html",
@@ -15,10 +17,7 @@ const ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(ASSETS))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())
   );
 });
 
@@ -33,22 +32,17 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  // Only handle same-origin GETs; never intercept API calls.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/api/")) return; // never touch API calls
 
-  // Cache-first for the app shell, falling back to network (and caching it).
+  // Network-first: fetch fresh, update cache, fall back to cache when offline.
   event.respondWith(
-    caches.match(event.request).then(
-      (cached) =>
-        cached ||
-        fetch(event.request)
-          .then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
-            return res;
-          })
-          .catch(() => cached)
-    )
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
