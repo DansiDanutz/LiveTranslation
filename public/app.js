@@ -30,6 +30,13 @@ const els = {
   sourceSelect: $("#source-lang"),
   targetSelect: $("#target-lang"),
   swapBtn: $("#swap-lang"),
+  // Conversation mode
+  modeTranslate: $("#mode-translate"),
+  modeConversation: $("#mode-conversation"),
+  personA: $("#person-a"),
+  personB: $("#person-b"),
+  convAb: $("#conv-ab"),
+  convBa: $("#conv-ba"),
   mic: $("#mic"),
   micHint: $("#mic-hint"),
   statusPill: $("#status-pill"),
@@ -107,6 +114,8 @@ let timerInterval = null;
 let pricePerMinute = 0.034;
 let sourceText = "";
 let targetText = "";
+let sessionTarget = null; // target language code of the in-progress session
+let activeDirection = null; // "AtoB" | "BtoA" in conversation mode
 
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
@@ -181,18 +190,51 @@ function populateLanguages() {
   }
   els.sourceSelect.value = "auto";
   els.targetSelect.value = "es";
+
+  // Conversation: both sides must be output-capable languages.
+  for (const sel of [els.personA, els.personB]) {
+    for (const lang of OUTPUT_LANGUAGES) {
+      const opt = document.createElement("option");
+      opt.value = lang.code;
+      opt.textContent = `${lang.flag}  ${lang.name}`;
+      sel.append(opt);
+    }
+  }
+  els.personA.value = "en";
+  els.personB.value = "es";
+}
+
+// The target language for the next/in-progress session, per current mode.
+function currentTarget() {
+  if (els.appView.getAttribute("data-mode") === "conversation") {
+    return activeDirection === "BtoA" ? els.personA.value : els.personB.value;
+  }
+  return els.targetSelect.value;
 }
 
 function restorePreferences() {
   const saved = JSON.parse(localStorage.getItem("lt-prefs") || "{}");
   if (saved.source) els.sourceSelect.value = saved.source;
   if (saved.target) els.targetSelect.value = saved.target;
+  if (saved.personA) els.personA.value = saved.personA;
+  if (saved.personB) els.personB.value = saved.personB;
+  els.appView.setAttribute("data-mode", saved.mode === "conversation" ? "conversation" : "translate");
+  if (saved.mode === "conversation") {
+    els.modeConversation.classList.add("is-active");
+    els.modeTranslate.classList.remove("is-active");
+  }
 }
 
 function savePreferences() {
   localStorage.setItem(
     "lt-prefs",
-    JSON.stringify({ source: els.sourceSelect.value, target: els.targetSelect.value })
+    JSON.stringify({
+      source: els.sourceSelect.value,
+      target: els.targetSelect.value,
+      personA: els.personA.value,
+      personB: els.personB.value,
+      mode: els.appView.getAttribute("data-mode"),
+    })
   );
 }
 
@@ -223,6 +265,16 @@ function wireEvents() {
     if (listening) restartSession();
   });
   els.sourceSelect.addEventListener("change", savePreferences);
+
+  // Mode toggle
+  els.modeTranslate.addEventListener("click", () => setMode("translate"));
+  els.modeConversation.addEventListener("click", () => setMode("conversation"));
+
+  // Conversation direction buttons (push-to-talk per person)
+  els.personA.addEventListener("change", savePreferences);
+  els.personB.addEventListener("change", savePreferences);
+  els.convAb.addEventListener("click", () => toggleDirection("AtoB"));
+  els.convBa.addEventListener("click", () => toggleDirection("BtoA"));
 
   els.muteAudio.addEventListener("click", () => {
     const muted = els.muteAudio.getAttribute("data-muted") === "true";
@@ -284,7 +336,11 @@ function wireEvents() {
     if (e.key === "Escape" && !els.sideMenu.hidden) closeMenu();
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
-      listening ? stopListening() : startListening();
+      if (els.appView.getAttribute("data-mode") === "conversation") {
+        toggleDirection(activeDirection || "AtoB");
+      } else {
+        listening ? stopListening() : startListening();
+      }
     }
   });
 }
@@ -352,6 +408,36 @@ async function refreshMicDevices() {
   }
 }
 
+async function setMode(mode) {
+  if (listening) await stopListening();
+  els.appView.setAttribute("data-mode", mode);
+  els.modeTranslate.classList.toggle("is-active", mode === "translate");
+  els.modeConversation.classList.toggle("is-active", mode === "conversation");
+  els.micHint.textContent =
+    mode === "conversation" ? "Tap a person to translate what they say" : "Tap to start translating";
+  savePreferences();
+}
+
+async function toggleDirection(dir) {
+  // Tapping the active direction stops; tapping the other switches.
+  if (listening && activeDirection === dir) {
+    await stopListening();
+    return;
+  }
+  if (listening) await stopListening();
+  activeDirection = dir;
+  await startListening();
+}
+
+function updateConvButtons() {
+  const a = listening && activeDirection === "AtoB";
+  const b = listening && activeDirection === "BtoA";
+  els.convAb.setAttribute("data-active", String(a));
+  els.convBa.setAttribute("data-active", String(b));
+  els.convAb.querySelector(".conv-mic__label").textContent = a ? "Listening… tap to stop" : "Tap & speak";
+  els.convBa.querySelector(".conv-mic__label").textContent = b ? "Listening… tap to stop" : "Tap & speak";
+}
+
 async function restartSession() {
   appendCaption(
     els.targetCaption,
@@ -370,9 +456,10 @@ async function startListening() {
   }
   try {
     setStatus("connecting", "Connecting…");
+    sessionTarget = currentTarget();
 
     // 1) Mint a short-lived token for this translation session.
-    const token = await mintToken(els.targetSelect.value);
+    const token = await mintToken(sessionTarget);
 
     // 2) Capture mic audio (from the chosen input device, if any).
     const deviceId = localStorage.getItem(DEVICE_KEY) || "";
@@ -420,8 +507,12 @@ async function startListening() {
     startLevelMeter(localStream);
     listening = true;
     els.mic.setAttribute("data-active", "true");
-    els.micHint.textContent = "Listening — speak naturally. Tap to stop.";
+    els.micHint.textContent =
+      els.appView.getAttribute("data-mode") === "conversation"
+        ? `Listening — translating into ${outputLanguageName(sessionTarget)}. Tap to stop.`
+        : "Listening — speak naturally. Tap to stop.";
     els.remoteAudio.volume = Number(els.volume.value);
+    updateConvButtons();
     startTimer();
     clearCaptions();
   } catch (err) {
@@ -446,7 +537,7 @@ async function stopListening(save = true) {
     if (sourceText.trim() || targetText.trim()) {
       savedEntry = saveHistory({
         ts: Date.now(),
-        target: els.targetSelect.value,
+        target: sessionTarget || els.targetSelect.value,
         seconds,
         sourceText: sourceText.trim(),
         targetText: targetText.trim(),
@@ -470,6 +561,8 @@ async function stopListening(save = true) {
   els.remoteAudio.srcObject = null;
   pc = dataChannel = localStream = null;
   setStatus("idle", "Idle");
+  activeDirection = null;
+  updateConvButtons();
 
   // Auto-summarize the session that just ended.
   if (savedEntry) generateSessionSummary(savedEntry);
