@@ -49,25 +49,26 @@
     <!-- ============================ APP VIEW ============================ -->
     <main id="app-view" class="app" hidden>
       <header class="topbar">
-        <div class="brand">
-          <div class="brand__mark">
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-              <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
+        <div class="topbar__left">
+          <button id="menu-btn" class="icon-btn" title="Menu" aria-label="Open menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M3 12h18M3 18h18" stroke-linecap="round" />
             </svg>
-          </div>
-          <div>
-            <div class="brand__title">LiveTranslation</div>
-            <div class="brand__subtitle">Real-time speech translation</div>
+          </button>
+          <div class="brand">
+            <div class="brand__mark">
+              <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+                <path d="M3 12h4l3 8 4-16 3 8h4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <div>
+              <div class="brand__title">LiveTranslation</div>
+              <div class="brand__subtitle">Real-time speech translation</div>
+            </div>
           </div>
         </div>
 
         <div class="topbar__right">
-          <button id="history-btn" class="icon-btn" title="Session history" aria-label="Session history">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 3v6h6M3.5 9a9 9 0 116 12.5" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M12 7v5l3 2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
           <button id="theme-btn" class="icon-btn" title="Toggle theme" aria-label="Toggle light/dark theme">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" stroke-linecap="round" stroke-linejoin="round" />
@@ -158,6 +159,18 @@
         </label>
       </section>
 
+      <!-- Session summary (appears after you stop the mic) -->
+      <section id="summary-card" class="card summary-card" hidden>
+        <div class="summary-card__head">
+          <span>📝 Session summary</span>
+          <div class="summary-card__actions">
+            <button id="summary-copy" class="chip chip--mini">📋 Copy</button>
+            <button id="summary-close" class="icon-btn" aria-label="Close summary">✕</button>
+          </div>
+        </div>
+        <div id="summary-body" class="summary-card__body"></div>
+      </section>
+
       <footer class="meta">
         <span>Model: <code id="model-tag">gpt-realtime-translate</code></span>
         <span>Price: <code id="price-tag">$0.034/min</code></span>
@@ -165,20 +178,55 @@
       </footer>
     </main>
 
-    <!-- ============================ HISTORY DRAWER ============================ -->
-    <aside id="history-drawer" class="drawer" hidden>
-      <div class="drawer__panel">
-        <div class="drawer__head">
-          <h2 class="drawer__title">Session history</h2>
-          <div class="drawer__actions">
-            <button id="history-clear" class="chip">🗑 Clear all</button>
-            <button id="history-close" class="icon-btn" aria-label="Close history">✕</button>
-          </div>
+    <!-- ============================ LEFT MENU ============================ -->
+    <aside id="side-menu" class="menu" hidden>
+      <div class="menu__panel">
+        <div class="menu__head">
+          <h2 class="menu__title">Menu</h2>
+          <button id="menu-close" class="icon-btn" aria-label="Close menu">✕</button>
         </div>
-        <div id="history-list" class="drawer__list"></div>
-        <p class="drawer__hint">History is stored privately on this device only.</p>
+
+        <div class="menu__scroll">
+          <!-- Balance -->
+          <section class="menu__section">
+            <div class="menu__section-title">OpenAI balance <span class="menu__est">(estimated)</span></div>
+            <div class="balance">
+              <div id="bal-remaining" class="balance__remaining">Set your balance →</div>
+              <div class="balance__bar"><div id="bal-bar" class="balance__bar-fill"></div></div>
+              <div class="balance__meta">
+                <span id="bal-spent">$0.000 used</span>
+                <span id="bal-credit"></span>
+              </div>
+              <div class="balance__actions">
+                <button id="bal-set" class="chip">✎ Set balance</button>
+                <a id="bal-topup" class="chip chip--link"
+                   href="https://platform.openai.com/settings/organization/billing/overview"
+                   target="_blank" rel="noopener">↗ Top up</a>
+              </div>
+              <p class="balance__note">Counts down by usage at $0.034/min. Update it after you top up.</p>
+            </div>
+          </section>
+
+          <!-- Summaries -->
+          <section class="menu__section">
+            <div class="menu__section-title">Summaries</div>
+            <button id="summarize-all" class="btn-wide">✨ Summary of all sessions</button>
+            <div id="overall-summary" class="overall-summary" hidden></div>
+          </section>
+
+          <!-- History -->
+          <section class="menu__section">
+            <div class="menu__section-title">
+              History
+              <button id="history-clear" class="chip chip--mini">🗑 Clear</button>
+            </div>
+            <div id="history-list" class="menu__list"></div>
+          </section>
+        </div>
+
+        <p class="menu__hint">History & balance are stored privately on this device.</p>
       </div>
-      <div id="drawer-backdrop" class="drawer__backdrop"></div>
+      <div id="menu-backdrop" class="menu__backdrop"></div>
     </aside>
 
     <div id="toast" class="toast" data-show="false"></div>
@@ -187,7 +235,6 @@
     <audio id="tts" autoplay playsinline></audio>
 
     <script>
-      // Register the service worker for installable/offline PWA support.
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () =>
           navigator.serviceWorker.register("/sw.js").catch(() => {})
