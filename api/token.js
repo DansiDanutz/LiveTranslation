@@ -5,9 +5,14 @@
 
 import crypto from "node:crypto";
 
+// Defaults to the "moltbot" Supabase project (publishable key is browser-safe);
+// env vars override these.
+const DEFAULT_SUPABASE_URL = "https://okgwzwdtuhhpoyxyprzg.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_K6-zQYAtqaJFQqdfK5U4RA_U6TnWTGZ";
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const SUPABASE_URL = process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 const AUTH_REQUIRED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 const MODEL = "gpt-realtime-translate";
 

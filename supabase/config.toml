@@ -1,0 +1,7 @@
+# Minimal Supabase CLI config so the repo is link-ready.
+# Link to the moltbot project locally with:
+#   supabase login                         # needs a personal access token
+#   supabase link --project-ref okgwzwdtuhhpoyxyprzg
+# Then apply the schema with:
+#   supabase db push                       # or run supabase/schema.sql in the SQL editor
+project_id = "live-translation"
