@@ -147,6 +147,21 @@ push`). The app auto-detects the table and starts syncing each signed-in user's
 sessions, protected by Row-Level Security (users only see their own). The
 summary model is configurable via `SUMMARY_MODEL` (default `gpt-4o-mini`).
 
+## Access & spend controls
+
+Because the app spends a real OpenAI key, every API route is guarded server-side
+(`lib/guard.js`) before any OpenAI call:
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `ALLOWED_EMAILS` | **owner only** | Who may translate/summarize/ask. `*` = anyone signed in; or a comma-separated email list. |
+| `MAX_MINUTES_PER_USER_PER_DAY` | `0` (off) | Soft per-user daily cap on translation minutes. |
+| `DAILY_BUDGET_USD` | `0` (off) | Global daily budget stop (needs `SUPABASE_SERVICE_ROLE_KEY` to measure). |
+
+Out of the box only the owner's account can spend; set `ALLOWED_EMAILS` in Vercel
+to open it up or invite others. Listeners on a `/?live=…` link are **read-only**
+and never hit these routes.
+
 ## Pricing
 
 `gpt-realtime-translate` is billed by **audio duration: $0.034 / minute**
