@@ -12,6 +12,7 @@ import dotenv from "dotenv";
 import tokenHandler from "./api/token.js";
 import configHandler from "./api/config.js";
 import summarizeHandler from "./api/summarize.js";
+import askHandler from "./api/ask.js";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.use(express.json());
 app.all("/api/token", (req, res) => tokenHandler(req, res));
 app.all("/api/config", (req, res) => configHandler(req, res));
 app.all("/api/summarize", (req, res) => summarizeHandler(req, res));
+app.all("/api/ask", (req, res) => askHandler(req, res));
 
 app.use(express.static(path.join(__dirname, "public")));
 
