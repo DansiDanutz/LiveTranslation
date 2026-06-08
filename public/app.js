@@ -73,6 +73,7 @@ const els = {
   summaryBody: $("#summary-body"),
   summaryClose: $("#summary-close"),
   summaryCopy: $("#summary-copy"),
+  summaryPdf: $("#summary-pdf"),
   summarizeAll: $("#summarize-all"),
   overallSummary: $("#overall-summary"),
   summaryLang: $("#summary-lang"),
@@ -116,6 +117,9 @@ let sourceText = "";
 let targetText = "";
 let sessionTarget = null; // target language code of the in-progress session
 let activeDirection = null; // "AtoB" | "BtoA" in conversation mode
+let currentUserId = null; // Supabase user id (for cloud sync)
+let cloudAvailable = true; // flips false if the sessions table isn't set up
+let lastSession = null; // last completed/viewed session (for PDF export)
 
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
@@ -162,6 +166,8 @@ function showAuthView() {
 function enterApp(user) {
   els.authView.hidden = true;
   els.appView.hidden = false;
+  currentUserId = user.id && user.id !== "demo" ? user.id : null;
+  cloudSyncDown(); // pull any sessions saved on other devices
   const name = user.user_metadata?.full_name || user.email || "Guest";
   const avatar = user.user_metadata?.avatar_url;
   els.userName.textContent = name;
@@ -323,6 +329,17 @@ function wireEvents() {
       () => showToast("Could not copy")
     );
   });
+  els.summaryPdf.addEventListener("click", () =>
+    exportPdf(
+      lastSession || {
+        target: sessionTarget || els.targetSelect.value,
+        sourceText,
+        targetText,
+        summary: els.summaryBody.textContent,
+        ts: Date.now(),
+      }
+    )
+  );
   els.summarizeAll.addEventListener("click", summarizeAllSessions);
 
   els.summaryLang.addEventListener("change", () =>
@@ -564,8 +581,11 @@ async function stopListening(save = true) {
   activeDirection = null;
   updateConvButtons();
 
-  // Auto-summarize the session that just ended.
-  if (savedEntry) generateSessionSummary(savedEntry);
+  if (savedEntry) {
+    lastSession = savedEntry;
+    cloudSyncUp(savedEntry);
+    generateSessionSummary(savedEntry); // auto-summarize the session that just ended
+  }
 }
 
 async function mintToken(language) {
@@ -728,6 +748,7 @@ function openMenu() {
   renderHistory();
   renderBalance();
   els.sideMenu.hidden = false;
+  cloudSyncDown(); // refresh from cloud if available
 }
 function closeMenu() {
   els.sideMenu.hidden = true;
@@ -779,6 +800,7 @@ function renderHistory() {
 
 function viewHistoryItem(item) {
   closeMenu();
+  lastSession = item;
   els.targetSelect.value = item.target;
   els.sourceCaption.innerHTML = "";
   els.targetCaption.innerHTML = "";
@@ -834,6 +856,8 @@ async function generateSessionSummary(entry) {
   try {
     const summary = await summarize(text, "session", summaryLanguage());
     patchHistory(entry.id, { summary });
+    lastSession = { ...entry, summary };
+    cloudSyncUp(lastSession);
     showSummary(summary);
   } catch (err) {
     els.summaryBody.textContent = "Could not summarize: " + err.message;
@@ -930,6 +954,120 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// ----- Cloud sync (optional; activates once the sessions table exists) -----
+function cloudReady() {
+  return cloudAvailable && currentUserId && config?.supabaseUrl && config?.supabaseAnonKey;
+}
+
+async function cloudHeaders() {
+  const token = await getAccessToken();
+  return {
+    apikey: config.supabaseAnonKey,
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function cloudSyncUp(entry) {
+  if (!cloudReady()) return;
+  try {
+    const res = await fetch(`${config.supabaseUrl}/rest/v1/sessions?on_conflict=user_id,client_id`, {
+      method: "POST",
+      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        user_id: currentUserId,
+        client_id: entry.id,
+        source_text: entry.sourceText || "",
+        target_text: entry.targetText || "",
+        summary: entry.summary || null,
+        target_language: entry.target,
+        duration_seconds: entry.seconds || 0,
+        created_at: new Date(entry.ts).toISOString(),
+      }),
+    });
+    if (res.status === 404) cloudAvailable = false;
+  } catch {
+    /* offline — local history still holds it */
+  }
+}
+
+async function cloudSyncDown() {
+  if (!cloudReady()) return;
+  try {
+    const res = await fetch(
+      `${config.supabaseUrl}/rest/v1/sessions?select=*&order=created_at.desc&limit=100`,
+      { headers: await cloudHeaders() }
+    );
+    if (res.status === 404) {
+      cloudAvailable = false;
+      return;
+    }
+    if (!res.ok) return;
+    mergeCloudRows(await res.json());
+  } catch {
+    /* ignore */
+  }
+}
+
+function mergeCloudRows(rows) {
+  const byId = new Map(loadHistory().map((i) => [i.id, i]));
+  for (const r of rows) {
+    const id = r.client_id || String(new Date(r.created_at).getTime());
+    if (!byId.has(id)) {
+      byId.set(id, {
+        id,
+        ts: new Date(r.created_at).getTime(),
+        target: r.target_language,
+        seconds: r.duration_seconds || 0,
+        sourceText: r.source_text || "",
+        targetText: r.target_text || "",
+        summary: r.summary || undefined,
+      });
+    } else if (r.summary && !byId.get(id).summary) {
+      byId.get(id).summary = r.summary;
+    }
+  }
+  const merged = Array.from(byId.values()).sort((a, b) => b.ts - a.ts).slice(0, 50);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+  if (!els.sideMenu.hidden) renderHistory();
+}
+
+// ----- PDF export (via the browser's print-to-PDF) -------------------------
+function exportPdf(s) {
+  if (!s || (!s.targetText && !s.sourceText && !s.summary)) {
+    showToast("Nothing to export yet.");
+    return;
+  }
+  const w = window.open("", "_blank");
+  if (!w) {
+    showToast("Allow pop-ups to export a PDF.");
+    return;
+  }
+  const esc = (x) => escapeHtml(x || "");
+  const when = s.ts ? new Date(s.ts).toLocaleString() : new Date().toLocaleString();
+  w.document.write(
+    `<!doctype html><html><head><meta charset="utf-8"><title>LiveTranslation — ${esc(
+      outputLanguageName(s.target)
+    )}</title><style>
+      body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:40px auto;padding:0 24px;color:#1a2238;line-height:1.6}
+      h1{font-size:22px;margin:0 0 2px}.meta{color:#666;font-size:13px;margin-bottom:22px}
+      h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#6d7cff;margin:22px 0 6px}
+      .box{white-space:pre-wrap;background:#f5f6fb;border:1px solid #e3e7f3;border-radius:10px;padding:14px}
+      .sum{white-space:pre-wrap;background:#eef7f4;border:1px solid #cfe8df;border-radius:10px;padding:14px}
+      footer{margin-top:30px;color:#999;font-size:12px}
+    </style></head><body>
+      <h1>🎙️ LiveTranslation</h1>
+      <div class="meta">Translation language: ${esc(outputLanguageName(s.target))} · ${esc(when)}</div>
+      ${s.summary ? `<h2>Summary</h2><div class="sum">${esc(s.summary)}</div>` : ""}
+      <h2>Spoken</h2><div class="box">${esc(s.sourceText) || "—"}</div>
+      <h2>Translation</h2><div class="box">${esc(s.targetText) || "—"}</div>
+      <footer>Generated by LiveTranslation</footer>
+      <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
+    </body></html>`
+  );
+  w.document.close();
 }
 
 // ----- Toast ---------------------------------------------------------------
