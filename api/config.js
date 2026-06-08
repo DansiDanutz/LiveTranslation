@@ -17,5 +17,6 @@ export default function handler(_req, res) {
     authRequired: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
     supabaseUrl: SUPABASE_URL,
     supabaseAnonKey: SUPABASE_ANON_KEY,
+    ownerEmail: (process.env.OWNER_EMAIL || "semebitcoin@gmail.com").toLowerCase(),
   });
 }
