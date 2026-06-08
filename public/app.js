@@ -49,23 +49,39 @@ const els = {
   remoteAudio: $("#tts"),
   // Feature controls
   themeBtn: $("#theme-btn"),
-  historyBtn: $("#history-btn"),
   presentBtn: $("#present-btn"),
   fontInc: $("#font-inc"),
   fontDec: $("#font-dec"),
   micDevice: $("#mic-device"),
   stage: $("#stage"),
-  drawer: $("#history-drawer"),
-  drawerBackdrop: $("#drawer-backdrop"),
-  historyClose: $("#history-close"),
+  // Left menu
+  menuBtn: $("#menu-btn"),
+  sideMenu: $("#side-menu"),
+  menuClose: $("#menu-close"),
+  menuBackdrop: $("#menu-backdrop"),
   historyClear: $("#history-clear"),
   historyList: $("#history-list"),
+  // Summaries
+  summaryCard: $("#summary-card"),
+  summaryBody: $("#summary-body"),
+  summaryClose: $("#summary-close"),
+  summaryCopy: $("#summary-copy"),
+  summarizeAll: $("#summarize-all"),
+  overallSummary: $("#overall-summary"),
+  // Balance
+  balRemaining: $("#bal-remaining"),
+  balBar: $("#bal-bar"),
+  balSpent: $("#bal-spent"),
+  balCredit: $("#bal-credit"),
+  balSet: $("#bal-set"),
 };
 
 const HISTORY_KEY = "lt-history";
 const THEME_KEY = "lt-theme";
 const FONT_KEY = "lt-font-scale";
 const DEVICE_KEY = "lt-mic-device";
+const BAL_KEY = "lt-balance";
+const SPENT_KEY = "lt-spent-total";
 
 // ----- State ---------------------------------------------------------------
 let config = null;
@@ -95,6 +111,7 @@ let targetText = "";
   restoreFontScale();
   wireEvents();
   refreshMicDevices();
+  renderBalance();
 
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
@@ -229,14 +246,27 @@ function wireEvents() {
     navigator.mediaDevices.addEventListener?.("devicechange", refreshMicDevices);
   }
 
-  // History drawer
-  els.historyBtn.addEventListener("click", openHistory);
-  els.historyClose.addEventListener("click", closeHistory);
-  els.drawerBackdrop.addEventListener("click", closeHistory);
+  // Left menu
+  els.menuBtn.addEventListener("click", openMenu);
+  els.menuClose.addEventListener("click", closeMenu);
+  els.menuBackdrop.addEventListener("click", closeMenu);
   els.historyClear.addEventListener("click", clearHistory);
 
+  // Summaries
+  els.summaryClose.addEventListener("click", () => (els.summaryCard.hidden = true));
+  els.summaryCopy.addEventListener("click", () => {
+    navigator.clipboard.writeText(els.summaryBody.textContent || "").then(
+      () => showToast("Summary copied", true),
+      () => showToast("Could not copy")
+    );
+  });
+  els.summarizeAll.addEventListener("click", summarizeAllSessions);
+
+  // Balance
+  els.balSet.addEventListener("click", promptSetBalance);
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.drawer.hidden) closeHistory();
+    if (e.key === "Escape" && !els.sideMenu.hidden) closeMenu();
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
       listening ? stopListening() : startListening();
@@ -392,15 +422,21 @@ async function startListening() {
 }
 
 async function stopListening(save = true) {
-  // Persist a completed session to local history (skip on language-swap restarts).
-  if (save && startTime && (sourceText.trim() || targetText.trim())) {
-    saveHistory({
-      ts: Date.now(),
-      target: els.targetSelect.value,
-      seconds: Math.round((Date.now() - startTime) / 1000),
-      sourceText: sourceText.trim(),
-      targetText: targetText.trim(),
-    });
+  let savedEntry = null;
+  if (save && startTime) {
+    const seconds = Math.round((Date.now() - startTime) / 1000);
+    // Account for spend (drives the balance estimate).
+    if (seconds > 0) chargeUsage((seconds / 60) * pricePerMinute);
+    // Persist a completed session (skip on language-swap restarts handled by save=false).
+    if (sourceText.trim() || targetText.trim()) {
+      savedEntry = saveHistory({
+        ts: Date.now(),
+        target: els.targetSelect.value,
+        seconds,
+        sourceText: sourceText.trim(),
+        targetText: targetText.trim(),
+      });
+    }
   }
   listening = false;
   els.mic.setAttribute("data-active", "false");
@@ -419,6 +455,9 @@ async function stopListening(save = true) {
   els.remoteAudio.srcObject = null;
   pc = dataChannel = localStream = null;
   setStatus("idle", "Idle");
+
+  // Auto-summarize the session that just ended.
+  if (savedEntry) generateSessionSummary(savedEntry);
 }
 
 async function mintToken(language) {
@@ -565,16 +604,25 @@ function loadHistory() {
 
 function saveHistory(entry) {
   const items = loadHistory();
-  items.unshift({ id: String(entry.ts), ...entry });
+  const full = { id: String(entry.ts), ...entry };
+  items.unshift(full);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 50))); // cap at 50
+  return full;
 }
 
-function openHistory() {
-  renderHistory();
-  els.drawer.hidden = false;
+function patchHistory(id, fields) {
+  const items = loadHistory().map((i) => (i.id === id ? { ...i, ...fields } : i));
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(items));
 }
-function closeHistory() {
-  els.drawer.hidden = true;
+
+// ----- Left menu -----------------------------------------------------------
+function openMenu() {
+  renderHistory();
+  renderBalance();
+  els.sideMenu.hidden = false;
+}
+function closeMenu() {
+  els.sideMenu.hidden = true;
 }
 
 function clearHistory() {
@@ -593,23 +641,25 @@ function renderHistory() {
   const items = loadHistory();
   els.historyList.innerHTML = "";
   if (!items.length) {
-    els.historyList.innerHTML = '<div class="drawer__empty">No saved sessions yet.</div>';
+    els.historyList.innerHTML = '<div class="menu__empty">No saved sessions yet.</div>';
     return;
   }
   for (const item of items) {
     const card = document.createElement("div");
     card.className = "history-item";
     const date = new Date(item.ts).toLocaleString();
-    const mins = Math.floor(item.seconds / 60);
-    const secs = item.seconds % 60;
-    const dur = `${mins}:${String(secs).padStart(2, "0")}`;
+    const dur = `${Math.floor(item.seconds / 60)}:${String(item.seconds % 60).padStart(2, "0")}`;
+    const summaryHtml = item.summary
+      ? `<div class="history-item__summary">${escapeHtml(item.summary)}</div>`
+      : "";
     card.innerHTML = `
       <div class="history-item__top">
         <span class="history-item__lang">→ ${escapeHtml(outputLanguageName(item.target))}</span>
         <span class="history-item__meta">${dur} · <button class="history-item__del" title="Delete">✕</button></span>
       </div>
       <div class="history-item__meta">${escapeHtml(date)}</div>
-      <div class="history-item__preview">${escapeHtml(item.targetText || item.sourceText || "")}</div>`;
+      <div class="history-item__preview">${escapeHtml(item.targetText || item.sourceText || "")}</div>
+      ${summaryHtml}`;
     card.querySelector(".history-item__del").addEventListener("click", (e) => {
       e.stopPropagation();
       deleteHistoryItem(item.id);
@@ -620,7 +670,7 @@ function renderHistory() {
 }
 
 function viewHistoryItem(item) {
-  closeHistory();
+  closeMenu();
   els.targetSelect.value = item.target;
   els.sourceCaption.innerHTML = "";
   els.targetCaption.innerHTML = "";
@@ -628,7 +678,129 @@ function viewHistoryItem(item) {
   appendCaption(els.targetCaption, item.targetText || "(no translation)");
   sourceText = item.sourceText || "";
   targetText = item.targetText || "";
+  if (item.summary) showSummary(item.summary);
   showToast("Loaded a saved session", true);
+}
+
+// ----- Summaries -----------------------------------------------------------
+async function summarize(text, mode, language) {
+  const accessToken = await getAccessToken();
+  const res = await fetch("/api/summarize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, mode, language, accessToken }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.summary) throw new Error(data.error || "Summary failed.");
+  return data.summary;
+}
+
+function showSummary(text) {
+  els.summaryBody.textContent = text;
+  els.summaryCard.hidden = false;
+  els.summaryCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function generateSessionSummary(entry) {
+  if (!config.keyConfigured) return;
+  const text =
+    `Spoken (source):\n${entry.sourceText || "(none)"}\n\n` +
+    `Translation (${outputLanguageName(entry.target)}):\n${entry.targetText || "(none)"}`;
+  els.summaryBody.textContent = "Summarizing this session…";
+  els.summaryCard.hidden = false;
+  try {
+    const summary = await summarize(text, "session", outputLanguageName(entry.target));
+    patchHistory(entry.id, { summary });
+    showSummary(summary);
+  } catch (err) {
+    els.summaryBody.textContent = "Could not summarize: " + err.message;
+  }
+}
+
+async function summarizeAllSessions() {
+  const items = loadHistory();
+  if (!items.length) {
+    showToast("No sessions to summarize yet.");
+    return;
+  }
+  els.overallSummary.hidden = false;
+  els.overallSummary.textContent = "Summarizing all sessions…";
+  // Prefer existing per-session summaries; fall back to translated text.
+  const parts = items
+    .slice()
+    .reverse()
+    .map((it, i) => {
+      const when = new Date(it.ts).toLocaleString();
+      const body = it.summary || (it.targetText || "").slice(0, 600);
+      return `Session ${i + 1} (${outputLanguageName(it.target)}, ${when}):\n${body}`;
+    });
+  try {
+    const summary = await summarize(parts.join("\n\n"), "overall");
+    els.overallSummary.textContent = summary;
+  } catch (err) {
+    els.overallSummary.textContent = "Could not summarize: " + err.message;
+  }
+}
+
+// ----- OpenAI balance (client-side estimate) -------------------------------
+function getBalance() {
+  const v = parseFloat(localStorage.getItem(BAL_KEY));
+  return Number.isFinite(v) ? v : null;
+}
+function getSpentTotal() {
+  return parseFloat(localStorage.getItem(SPENT_KEY) || "0") || 0;
+}
+
+function chargeUsage(amount) {
+  if (amount <= 0) return;
+  localStorage.setItem(SPENT_KEY, String(getSpentTotal() + amount));
+  const bal = getBalance();
+  if (bal !== null) {
+    const next = Math.max(0, bal - amount);
+    localStorage.setItem(BAL_KEY, String(next));
+    if (bal > 1 && next <= 1) showToast("⚠️ OpenAI balance low (≈ $1 left) — consider topping up.");
+    else if (bal > 0 && next <= 0) showToast("⚠️ Estimated OpenAI balance is $0 — top up to keep translating.");
+  }
+  renderBalance();
+}
+
+function promptSetBalance() {
+  const cur = getBalance();
+  const input = prompt(
+    "Enter your current OpenAI credit balance in USD (check it on the billing page):",
+    cur !== null ? String(cur) : "20"
+  );
+  if (input === null) return;
+  const val = parseFloat(input);
+  if (!Number.isFinite(val) || val < 0) {
+    showToast("Please enter a valid amount.");
+    return;
+  }
+  localStorage.setItem(BAL_KEY, String(val));
+  localStorage.setItem("lt-balance-initial", String(val));
+  renderBalance();
+  showToast("Balance set to $" + val.toFixed(2), true);
+}
+
+function renderBalance() {
+  const bal = getBalance();
+  const spent = getSpentTotal();
+  els.balSpent.textContent = `$${spent.toFixed(3)} used`;
+  if (bal === null) {
+    els.balRemaining.textContent = "Set your balance →";
+    els.balRemaining.className = "balance__remaining";
+    els.balBar.style.width = "0%";
+    els.balCredit.textContent = "";
+    return;
+  }
+  const initial = parseFloat(localStorage.getItem("lt-balance-initial") || String(bal)) || bal;
+  els.balRemaining.textContent = `≈ $${bal.toFixed(2)} left`;
+  els.balCredit.textContent = `of $${initial.toFixed(2)}`;
+  const pct = initial > 0 ? Math.max(0, Math.min(100, (bal / initial) * 100)) : 0;
+  els.balBar.style.width = pct + "%";
+  const level = bal <= 1 ? "low" : bal <= initial * 0.2 ? "warn" : "ok";
+  els.balRemaining.className = "balance__remaining balance__remaining--" + level;
+  els.balBar.dataset.level = level;
 }
 
 function escapeHtml(s) {
