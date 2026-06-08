@@ -1019,6 +1019,18 @@ button.chip:hover {
 }
 
 /* ----- Wide button + summaries ------------------------------------------- */
+.menu__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  font-size: var(--fs-xs);
+  color: var(--c-text-faint);
+}
+.menu__field .select {
+  width: 100%;
+  max-width: none;
+}
+
 .btn-wide {
   width: 100%;
   padding: var(--s-3) var(--s-4);
