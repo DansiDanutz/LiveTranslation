@@ -96,6 +96,10 @@ const els = {
   liveStatus: $("#live-status"),
   liveSource: $("#live-source"),
   liveTarget: $("#live-target"),
+  // Install (PWA)
+  installSection: $("#install-section"),
+  installBtn: $("#install-btn"),
+  installIosHint: $("#install-ios-hint"),
   // Balance
   balRemaining: $("#bal-remaining"),
   balBar: $("#bal-bar"),
@@ -142,6 +146,48 @@ let isOwner = false;
 let cloudAvailable = true; // flips false if the sessions table isn't set up
 let lastSession = null; // last completed/viewed session (for PDF export)
 
+// ----- App install (PWA) ----------------------------------------------------
+// Captured at module load — the browser fires beforeinstallprompt once, early;
+// we stash it so the "Install" button can re-fire the native prompt on demand.
+let deferredInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  els.installSection.hidden = false;
+  els.installBtn.hidden = false;
+  els.installIosHint.hidden = true;
+});
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  els.installSection.hidden = true;
+  showToast("App installed — find it on your home screen 🎉", true);
+});
+
+function setupInstall() {
+  const standalone =
+    window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (standalone) return; // already running as an installed app
+  // iOS Safari has no install prompt — show the Add to Home Screen steps.
+  const ua = navigator.userAgent;
+  const isIOS =
+    /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  if (isIOS) {
+    els.installSection.hidden = false;
+    els.installBtn.hidden = true;
+    els.installIosHint.hidden = false;
+  }
+}
+
+async function promptInstall() {
+  if (!deferredInstallPrompt) {
+    showToast("Use your browser menu → “Install app” / “Add to Home screen”.");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice.catch(() => {});
+  deferredInstallPrompt = null;
+}
+
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
   // Listener mode: anyone with a ?live=ROOM link follows a session read-only.
@@ -165,6 +211,7 @@ let lastSession = null; // last completed/viewed session (for PDF export)
   refreshMicDevices();
   renderBalance();
   populateSummaryLanguages();
+  setupInstall();
 
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
@@ -397,6 +444,9 @@ function wireEvents() {
     e.preventDefault();
     addAllowedEmail();
   });
+
+  // Install app
+  els.installBtn.addEventListener("click", promptInstall);
 
   // Balance
   els.balSet.addEventListener("click", promptSetBalance);

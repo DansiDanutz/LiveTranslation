@@ -3,7 +3,7 @@
 // effect immediately), falling back to cache only when offline. API requests
 // are never intercepted.
 
-const CACHE = "lt-v4"; // v4: purge caches that may hold error responses
+const CACHE = "lt-v5"; // v5: PNG install icons; v4: purge cached error responses
 const ASSETS = [
   "/",
   "/index.html",
@@ -13,6 +13,10 @@ const ASSETS = [
   "/languages.js",
   "/manifest.json",
   "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
 ];
 
 self.addEventListener("install", (event) => {
