@@ -105,7 +105,8 @@ That's it — open your `*.vercel.app` URL and start translating.
 - **Light / dark theme** toggle (remembered)
 - **Microphone device picker**
 - **Session history** — past sessions auto-saved on-device; reopen or delete
-- **Installable PWA** — add to home screen, offline app shell
+- **Installable app (PWA)** — one-tap **Install** button (Menu → Get the app) with
+  real home-screen icons on Android & iPhone, offline app shell
 - **Language swap** + remembers your last-used languages
 - **Mic level meter** and live **status** indicator
 - **Captions-only mode** (mute translated audio) + volume control

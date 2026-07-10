@@ -96,6 +96,10 @@ const els = {
   liveStatus: $("#live-status"),
   liveSource: $("#live-source"),
   liveTarget: $("#live-target"),
+  // Install (PWA)
+  installSection: $("#install-section"),
+  installBtn: $("#install-btn"),
+  installIosHint: $("#install-ios-hint"),
   // Balance
   balRemaining: $("#bal-remaining"),
   balBar: $("#bal-bar"),
@@ -142,6 +146,48 @@ let isOwner = false;
 let cloudAvailable = true; // flips false if the sessions table isn't set up
 let lastSession = null; // last completed/viewed session (for PDF export)
 
+// ----- App install (PWA) ----------------------------------------------------
+// Captured at module load — the browser fires beforeinstallprompt once, early;
+// we stash it so the "Install" button can re-fire the native prompt on demand.
+let deferredInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  els.installSection.hidden = false;
+  els.installBtn.hidden = false;
+  els.installIosHint.hidden = true;
+});
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  els.installSection.hidden = true;
+  showToast("App installed — find it on your home screen 🎉", true);
+});
+
+function setupInstall() {
+  const standalone =
+    window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (standalone) return; // already running as an installed app
+  // iOS Safari has no install prompt — show the Add to Home Screen steps.
+  const ua = navigator.userAgent;
+  const isIOS =
+    /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  if (isIOS) {
+    els.installSection.hidden = false;
+    els.installBtn.hidden = true;
+    els.installIosHint.hidden = false;
+  }
+}
+
+async function promptInstall() {
+  if (!deferredInstallPrompt) {
+    showToast("Use your browser menu → “Install app” / “Add to Home screen”.");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice.catch(() => {});
+  deferredInstallPrompt = null;
+}
+
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
   // Listener mode: anyone with a ?live=ROOM link follows a session read-only.
@@ -165,6 +211,7 @@ let lastSession = null; // last completed/viewed session (for PDF export)
   refreshMicDevices();
   renderBalance();
   populateSummaryLanguages();
+  setupInstall();
 
   if (!config.keyConfigured) {
     showToast("Server is missing OPENAI_API_KEY — translation is disabled.");
@@ -398,6 +445,9 @@ function wireEvents() {
     addAllowedEmail();
   });
 
+  // Install app
+  els.installBtn.addEventListener("click", promptInstall);
+
   // Balance
   els.balSet.addEventListener("click", promptSetBalance);
 
@@ -507,13 +557,18 @@ function updateConvButtons() {
   els.convBa.querySelector(".conv-mic__label").textContent = b ? "Listening… tap to stop" : "Tap & speak";
 }
 
+let keepCaptions = false; // set for restarts so the transcript isn't wiped
+
 async function restartSession() {
+  const dir = activeDirection; // stopListening resets it; keep the direction
+  keepCaptions = true;
+  await stopListening(false); // don't fragment history on a language change
+  activeDirection = dir;
   appendCaption(
     els.targetCaption,
-    `\n— reconnecting to translate into ${outputLanguageName(els.targetSelect.value)} —\n`,
+    `\n— reconnecting to translate into ${outputLanguageName(currentTarget())} —\n`,
     true
   );
-  await stopListening(false); // don't fragment history on a language change
   await startListening();
 }
 
@@ -550,7 +605,13 @@ async function startListening() {
 
     // Transcript events flow over this data channel.
     dataChannel = pc.createDataChannel("oai-events");
-    dataChannel.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    dataChannel.onmessage = (e) => {
+      try {
+        handleEvent(JSON.parse(e.data));
+      } catch {
+        /* ignore malformed frames */
+      }
+    };
     dataChannel.onopen = () => setStatus("listening", "Listening");
 
     pc.onconnectionstatechange = () => {
@@ -583,9 +644,13 @@ async function startListening() {
     els.remoteAudio.volume = Number(els.volume.value);
     updateConvButtons();
     startTimer();
-    clearCaptions();
+    // On a mid-session restart (language/device change) keep the transcript
+    // accumulated so far; a fresh session starts with clean captions.
+    if (keepCaptions) keepCaptions = false;
+    else clearCaptions();
   } catch (err) {
     console.error(err);
+    keepCaptions = false;
     setStatus("error", "Error");
     showToast(
       err.name === "NotAllowedError"
@@ -598,12 +663,17 @@ async function startListening() {
 
 async function stopListening(save = true) {
   let savedEntry = null;
-  if (save && startTime) {
+  // Only account for time if a session was actually running — stopListening is
+  // also called from startListening's error path, where a stale startTime from
+  // a PREVIOUS session would otherwise charge phantom minutes and re-save a
+  // duplicate history entry.
+  if (listening && startTime) {
     const seconds = Math.round((Date.now() - startTime) / 1000);
-    // Account for spend (drives the balance estimate).
+    // Account for spend (drives the balance estimate) — including on
+    // language-change restarts (save=false), which are still billed time.
     if (seconds > 0) chargeUsage((seconds / 60) * pricePerMinute);
     // Persist a completed session (skip on language-swap restarts handled by save=false).
-    if (sourceText.trim() || targetText.trim()) {
+    if (save && (sourceText.trim() || targetText.trim())) {
       savedEntry = saveHistory({
         ts: Date.now(),
         target: sessionTarget || els.targetSelect.value,
@@ -613,6 +683,7 @@ async function stopListening(save = true) {
       });
     }
   }
+  startTime = 0;
   listening = false;
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";

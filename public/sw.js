@@ -3,7 +3,7 @@
 // effect immediately), falling back to cache only when offline. API requests
 // are never intercepted.
 
-const CACHE = "lt-v3";
+const CACHE = "lt-v5"; // v5: PNG install icons; v4: purge cached error responses
 const ASSETS = [
   "/",
   "/index.html",
@@ -13,6 +13,10 @@ const ASSETS = [
   "/languages.js",
   "/manifest.json",
   "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -39,8 +43,12 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(event.request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
+        // Only cache good responses — a cached 404/500 would otherwise be
+        // served as the offline fallback forever.
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
+        }
         return res;
       })
       .catch(() => caches.match(event.request))

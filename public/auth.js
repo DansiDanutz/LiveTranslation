@@ -108,6 +108,11 @@ export async function getAccessToken() {
           expires_at: Date.now() + (j.expires_in || 3600) * 1000,
         };
         saveSession(s);
+      } else if (r.status === 400 || r.status === 401) {
+        // Refresh token revoked/expired — the session is dead. Drop it so the
+        // app shows the sign-in screen instead of failing every API call.
+        localStorage.removeItem(STORE_KEY);
+        return null;
       }
     } catch {
       /* keep existing token */
