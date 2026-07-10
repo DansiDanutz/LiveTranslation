@@ -35,7 +35,9 @@ if (!process.env.OPENAI_API_KEY) {
   console.warn("[warn] OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.");
 }
 if (!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)) {
-  console.warn("[warn] Supabase not configured — running in open/demo mode (no Google sign-in).");
+  console.warn(
+    "[warn] SUPABASE_URL/SUPABASE_ANON_KEY not set — using the built-in default Supabase project for sign-in."
+  );
 }
 
 app.listen(PORT, () => {

@@ -507,13 +507,18 @@ function updateConvButtons() {
   els.convBa.querySelector(".conv-mic__label").textContent = b ? "Listening… tap to stop" : "Tap & speak";
 }
 
+let keepCaptions = false; // set for restarts so the transcript isn't wiped
+
 async function restartSession() {
+  const dir = activeDirection; // stopListening resets it; keep the direction
+  keepCaptions = true;
+  await stopListening(false); // don't fragment history on a language change
+  activeDirection = dir;
   appendCaption(
     els.targetCaption,
-    `\n— reconnecting to translate into ${outputLanguageName(els.targetSelect.value)} —\n`,
+    `\n— reconnecting to translate into ${outputLanguageName(currentTarget())} —\n`,
     true
   );
-  await stopListening(false); // don't fragment history on a language change
   await startListening();
 }
 
@@ -550,7 +555,13 @@ async function startListening() {
 
     // Transcript events flow over this data channel.
     dataChannel = pc.createDataChannel("oai-events");
-    dataChannel.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    dataChannel.onmessage = (e) => {
+      try {
+        handleEvent(JSON.parse(e.data));
+      } catch {
+        /* ignore malformed frames */
+      }
+    };
     dataChannel.onopen = () => setStatus("listening", "Listening");
 
     pc.onconnectionstatechange = () => {
@@ -583,9 +594,13 @@ async function startListening() {
     els.remoteAudio.volume = Number(els.volume.value);
     updateConvButtons();
     startTimer();
-    clearCaptions();
+    // On a mid-session restart (language/device change) keep the transcript
+    // accumulated so far; a fresh session starts with clean captions.
+    if (keepCaptions) keepCaptions = false;
+    else clearCaptions();
   } catch (err) {
     console.error(err);
+    keepCaptions = false;
     setStatus("error", "Error");
     showToast(
       err.name === "NotAllowedError"
@@ -598,12 +613,17 @@ async function startListening() {
 
 async function stopListening(save = true) {
   let savedEntry = null;
-  if (save && startTime) {
+  // Only account for time if a session was actually running — stopListening is
+  // also called from startListening's error path, where a stale startTime from
+  // a PREVIOUS session would otherwise charge phantom minutes and re-save a
+  // duplicate history entry.
+  if (listening && startTime) {
     const seconds = Math.round((Date.now() - startTime) / 1000);
-    // Account for spend (drives the balance estimate).
+    // Account for spend (drives the balance estimate) — including on
+    // language-change restarts (save=false), which are still billed time.
     if (seconds > 0) chargeUsage((seconds / 60) * pricePerMinute);
     // Persist a completed session (skip on language-swap restarts handled by save=false).
-    if (sourceText.trim() || targetText.trim()) {
+    if (save && (sourceText.trim() || targetText.trim())) {
       savedEntry = saveHistory({
         ts: Date.now(),
         target: sessionTarget || els.targetSelect.value,
@@ -613,6 +633,7 @@ async function stopListening(save = true) {
       });
     }
   }
+  startTime = 0;
   listening = false;
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";
