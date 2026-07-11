@@ -128,6 +128,17 @@
         </div>
       </section>
 
+      <!-- First-run welcome (dismissed once, never shown again) -->
+      <section id="welcome-card" class="card welcome" hidden>
+        <div class="welcome__title">👋 Welcome! Three steps:</div>
+        <ol class="welcome__steps">
+          <li>Pick the language you want to <strong>hear</strong> in the “To” box.</li>
+          <li>Tap the big <strong>mic button</strong> below and allow the microphone.</li>
+          <li>Just speak — the translation <strong>plays out loud</strong> and appears as captions.</li>
+        </ol>
+        <button id="welcome-dismiss" class="btn-wide">Got it — let’s go</button>
+      </section>
+
       <!-- Live captions -->
       <section id="stage" class="stage">
         <button id="present-btn" class="present-btn" title="Presentation mode" aria-label="Presentation mode">
