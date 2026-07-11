@@ -39,6 +39,8 @@ const els = {
   convBa: $("#conv-ba"),
   mic: $("#mic"),
   micHint: $("#mic-hint"),
+  welcomeCard: $("#welcome-card"),
+  welcomeDismiss: $("#welcome-dismiss"),
   statusPill: $("#status-pill"),
   statusText: $("#status-text"),
   sourceCaption: $("#source-caption"),
@@ -115,6 +117,10 @@ const DEVICE_KEY = "lt-mic-device";
 const BAL_KEY = "lt-balance";
 const SPENT_KEY = "lt-spent-total";
 const SUMMARY_LANG_KEY = "lt-summary-lang";
+const VOLUME_KEY = "lt-volume";
+const MUTED_KEY = "lt-muted";
+const WELCOME_KEY = "lt-welcome-done";
+const INSTALL_TIP_KEY = "lt-install-tip-shown";
 
 // Summaries can be written in any language — defaults to Romanian (which isn't
 // one of the 13 translation OUTPUT languages, so this is the way to get
@@ -156,6 +162,11 @@ window.addEventListener("beforeinstallprompt", (e) => {
   els.installSection.hidden = false;
   els.installBtn.hidden = false;
   els.installIosHint.hidden = true;
+  // Point people at the install button once — it lives inside the menu.
+  if (!localStorage.getItem(INSTALL_TIP_KEY)) {
+    localStorage.setItem(INSTALL_TIP_KEY, "1");
+    showToast("Tip: install this as an app — Menu ☰ → Get the app 📲", true);
+  }
 });
 window.addEventListener("appinstalled", () => {
   deferredInstallPrompt = null;
@@ -188,6 +199,28 @@ async function promptInstall() {
   deferredInstallPrompt = null;
 }
 
+// ----- Screen wake lock ------------------------------------------------------
+// Phones dim and lock the screen mid-conversation, which suspends the mic and
+// kills the session. Hold a wake lock while listening; re-acquire when the tab
+// becomes visible again (the OS silently releases it on tab switch).
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    wakeLock = await navigator.wakeLock?.request("screen");
+  } catch {
+    /* unsupported or denied — not critical */
+  }
+}
+function releaseWakeLock() {
+  try {
+    wakeLock?.release();
+  } catch {}
+  wakeLock = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (listening && document.visibilityState === "visible") acquireWakeLock();
+});
+
 // ----- Boot ----------------------------------------------------------------
 (async function boot() {
   // Listener mode: anyone with a ?live=ROOM link follows a session read-only.
@@ -207,7 +240,9 @@ async function promptInstall() {
   restorePreferences();
   restoreTheme();
   restoreFontScale();
+  restoreAudioPrefs();
   wireEvents();
+  if (!localStorage.getItem(WELCOME_KEY)) els.welcomeCard.hidden = false;
   refreshMicDevices();
   renderBalance();
   populateSummaryLanguages();
@@ -366,10 +401,18 @@ function wireEvents() {
     els.muteAudio.setAttribute("data-muted", String(!muted));
     els.muteAudio.textContent = !muted ? "🔇 Audio off" : "🔊 Audio on";
     els.remoteAudio.muted = !muted;
+    localStorage.setItem(MUTED_KEY, String(!muted));
   });
 
   els.volume.addEventListener("input", () => {
     els.remoteAudio.volume = Number(els.volume.value);
+    localStorage.setItem(VOLUME_KEY, els.volume.value);
+  });
+
+  // First-run welcome
+  els.welcomeDismiss.addEventListener("click", () => {
+    localStorage.setItem(WELCOME_KEY, "1");
+    els.welcomeCard.hidden = true;
   });
 
   els.copyBtn.addEventListener("click", copyTranscript);
@@ -481,6 +524,19 @@ function toggleTheme() {
 }
 
 // ----- Caption font size ---------------------------------------------------
+function restoreAudioPrefs() {
+  const vol = parseFloat(localStorage.getItem(VOLUME_KEY));
+  if (Number.isFinite(vol)) {
+    els.volume.value = String(vol);
+    els.remoteAudio.volume = vol;
+  }
+  if (localStorage.getItem(MUTED_KEY) === "true") {
+    els.muteAudio.setAttribute("data-muted", "true");
+    els.muteAudio.textContent = "🔇 Audio off";
+    els.remoteAudio.muted = true;
+  }
+}
+
 function restoreFontScale() {
   const scale = parseFloat(localStorage.getItem(FONT_KEY) || "1");
   document.documentElement.style.setProperty("--caption-scale", String(scale));
@@ -615,8 +671,17 @@ async function startListening() {
     dataChannel.onopen = () => setStatus("listening", "Listening");
 
     pc.onconnectionstatechange = () => {
-      if (["failed", "disconnected", "closed"].includes(pc.connectionState) && listening) {
-        setStatus("error", "Disconnected");
+      if (!listening || !pc) return;
+      if (pc.connectionState === "disconnected") {
+        // WebRTC can recover from "disconnected" on its own — don't kill it.
+        setStatus("connecting", "Reconnecting…");
+      } else if (pc.connectionState === "connected") {
+        setStatus("listening", "Listening");
+      } else if (["failed", "closed"].includes(pc.connectionState)) {
+        // Dead for real: stop cleanly so the mic doesn't LOOK live while
+        // nothing is being translated; the transcript is saved as usual.
+        showToast("Connection lost — your transcript was saved. Tap the mic to reconnect.");
+        stopListening();
       }
     };
 
@@ -636,6 +701,11 @@ async function startListening() {
     // 5) UI + mic level meter.
     startLevelMeter(localStream);
     listening = true;
+    acquireWakeLock(); // keep the phone screen on during the session
+    if (!els.welcomeCard.hidden) {
+      els.welcomeCard.hidden = true;
+      localStorage.setItem(WELCOME_KEY, "1");
+    }
     els.mic.setAttribute("data-active", "true");
     els.micHint.textContent =
       els.appView.getAttribute("data-mode") === "conversation"
@@ -685,6 +755,7 @@ async function stopListening(save = true) {
   }
   startTime = 0;
   listening = false;
+  releaseWakeLock();
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";
   stopTimer();

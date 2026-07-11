@@ -95,6 +95,9 @@ That's it — open your `*.vercel.app` URL and start translating.
 ## Features
 
 - One-tap mic, **spacebar** to toggle listening
+- **First-run welcome** with 3 simple steps; **screen stays awake** while translating
+- **Friendly connection recovery** — if the call drops, the transcript is saved
+  and the app tells you to tap the mic to reconnect
 - **Two-way conversation mode** — two people, two languages, push-to-talk per side
 - **AI session summaries** on stop + **"Summary of all"** (language selectable, default Romanian)
 - **OpenAI balance tracker** (estimate) with low-balance warnings + a top-up link

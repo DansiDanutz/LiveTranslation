@@ -1295,3 +1295,29 @@ button.chip:hover {
     transition: none !important;
   }
 }
+
+/* ----- First-run welcome card --------------------------------------------- */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border-color: var(--c-primary);
+}
+.welcome__title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+}
+.welcome__steps {
+  margin: 0;
+  padding-left: 1.3em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  line-height: 1.5;
+}
+.welcome__steps strong {
+  color: var(--c-text);
+}
