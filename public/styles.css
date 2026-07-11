@@ -1374,3 +1374,42 @@ button.chip:hover {
 .modal__foot .btn-wide {
   flex: 1;
 }
+
+/* ----- Always-visible balance chip (topbar) -------------------------------- */
+.bal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.bal-chip:hover {
+  background: var(--c-surface-2);
+}
+.bal-chip[data-level="ok"] {
+  color: var(--c-success);
+  border-color: var(--c-border-strong);
+}
+.bal-chip[data-level="warn"] {
+  color: var(--c-source);
+  border-color: var(--c-source);
+}
+.bal-chip[data-level="low"],
+.bal-chip[data-level="empty"] {
+  color: #fff;
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+}
+.bal-chip[data-level="empty"] {
+  animation: bal-pulse 1.6s ease-in-out infinite;
+}
+@keyframes bal-pulse {
+  50% { opacity: 0.65; }
+}

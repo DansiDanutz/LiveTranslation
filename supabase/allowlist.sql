@@ -27,3 +27,31 @@ drop policy if exists "allowlist owner delete" on public.app_allowlist;
 create policy "allowlist owner delete"
   on public.app_allowlist for delete
   using ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');
+
+-- Registry of accounts that signed in, so the owner can approve them from
+-- inside the app (Menu → Access → "Signed in — waiting for approval").
+create table if not exists public.app_signins (
+  email text primary key,
+  name text,
+  last_seen timestamptz not null default now()
+);
+
+alter table public.app_signins enable row level security;
+
+-- Any signed-in user may record/refresh THEIR OWN sign-in row.
+drop policy if exists "signins self insert" on public.app_signins;
+create policy "signins self insert"
+  on public.app_signins for insert
+  with check (lower(auth.jwt() ->> 'email') = email);
+
+drop policy if exists "signins self update" on public.app_signins;
+create policy "signins self update"
+  on public.app_signins for update
+  using (lower(auth.jwt() ->> 'email') = email)
+  with check (lower(auth.jwt() ->> 'email') = email);
+
+-- Only the owner may read the registry.
+drop policy if exists "signins owner read" on public.app_signins;
+create policy "signins owner read"
+  on public.app_signins for select
+  using ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');
