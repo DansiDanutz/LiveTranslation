@@ -110,6 +110,7 @@ const els = {
   installSection: $("#install-section"),
   installBtn: $("#install-btn"),
   installIosHint: $("#install-ios-hint"),
+  installGenericHint: $("#install-generic-hint"),
   // Balance
   balChip: $("#bal-chip"),
   balChipText: $("#bal-chip-text"),
@@ -172,6 +173,7 @@ window.addEventListener("beforeinstallprompt", (e) => {
   els.installSection.hidden = false;
   els.installBtn.hidden = false;
   els.installIosHint.hidden = true;
+  els.installGenericHint.hidden = true;
   // Point people at the install button once — it lives inside the menu.
   if (!localStorage.getItem(INSTALL_TIP_KEY)) {
     localStorage.setItem(INSTALL_TIP_KEY, "1");
@@ -188,12 +190,14 @@ function setupInstall() {
   const standalone =
     window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
   if (standalone) return; // already running as an installed app
-  // iOS Safari has no install prompt — show the Add to Home Screen steps.
+  // Always show the section — some browsers (Samsung Internet, Opera, Firefox)
+  // never fire beforeinstallprompt, and the button must still be findable.
+  els.installSection.hidden = false;
   const ua = navigator.userAgent;
   const isIOS =
     /iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
   if (isIOS) {
-    els.installSection.hidden = false;
+    // iOS Safari has no install prompt — show the Add to Home Screen steps.
     els.installBtn.hidden = true;
     els.installIosHint.hidden = false;
   }
@@ -201,7 +205,9 @@ function setupInstall() {
 
 async function promptInstall() {
   if (!deferredInstallPrompt) {
-    showToast("Use your browser menu → “Install app” / “Add to Home screen”.");
+    // No native prompt available in this browser — show the manual steps.
+    els.installGenericHint.hidden = false;
+    showToast("Use your browser menu → “Add to home screen” / “Install app”.");
     return;
   }
   deferredInstallPrompt.prompt();
@@ -346,6 +352,17 @@ function currentTarget() {
 
 function restorePreferences() {
   const saved = JSON.parse(localStorage.getItem("lt-prefs") || "{}");
+  // One-time migration: devices that stored the OLD default target (Spanish)
+  // before Turkish→English became the default move over once. Anything the
+  // user picks afterwards sticks as usual.
+  if (!localStorage.getItem("lt-migrated-tr-en")) {
+    localStorage.setItem("lt-migrated-tr-en", "1");
+    if (saved.target === "es") {
+      saved.target = "en";
+      if (!saved.source || saved.source === "auto") saved.source = "tr";
+      localStorage.setItem("lt-prefs", JSON.stringify(saved));
+    }
+  }
   if (saved.source) els.sourceSelect.value = saved.source;
   if (saved.target) els.targetSelect.value = saved.target;
   if (saved.personA) els.personA.value = saved.personA;
