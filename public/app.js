@@ -75,6 +75,7 @@ const els = {
   allowForm: $("#allow-form"),
   allowInput: $("#allow-input"),
   allowList: $("#allow-list"),
+  signinList: $("#signin-list"),
   // Romanian transcript dialog
   roModal: $("#ro-modal"),
   roModalBackdrop: $("#ro-modal-backdrop"),
@@ -110,6 +111,8 @@ const els = {
   installBtn: $("#install-btn"),
   installIosHint: $("#install-ios-hint"),
   // Balance
+  balChip: $("#bal-chip"),
+  balChipText: $("#bal-chip-text"),
   balRemaining: $("#bal-remaining"),
   balBar: $("#bal-bar"),
   balSpent: $("#bal-spent"),
@@ -288,6 +291,7 @@ function enterApp(user) {
   currentUserEmail = (user.email || "").toLowerCase();
   isOwner = Boolean(config?.ownerEmail) && currentUserEmail === config.ownerEmail;
   els.adminSection.hidden = !isOwner;
+  recordSignin(user); // register this account so the owner can approve it
   cloudSyncDown(); // pull any sessions saved on other devices
   const name = user.user_metadata?.full_name || user.email || "Guest";
   const avatar = user.user_metadata?.avatar_url;
@@ -512,6 +516,20 @@ function wireEvents() {
 
   // Balance
   els.balSet.addEventListener("click", promptSetBalance);
+  els.balChip.addEventListener("click", () => {
+    const bal = getBalance();
+    if (bal === null) return promptSetBalance();
+    if (bal <= 0.005) {
+      // Empty — go straight to the top-up page.
+      window.open(
+        "https://platform.openai.com/settings/organization/billing/overview",
+        "_blank",
+        "noopener"
+      );
+      return;
+    }
+    openMenu(); // full balance controls live in the menu
+  });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !els.roModal.hidden) return closeRoModal();
@@ -931,7 +949,11 @@ function startTimer() {
     const m = String(Math.floor(secs / 60)).padStart(2, "0");
     const s = String(Math.floor(secs % 60)).padStart(2, "0");
     els.timer.textContent = `${m}:${s}`;
-    els.cost.textContent = `$${((secs / 60) * pricePerMinute).toFixed(3)}`;
+    const sessionCost = (secs / 60) * pricePerMinute;
+    els.cost.textContent = `$${sessionCost.toFixed(3)}`;
+    // Live balance countdown in the topbar while the session runs.
+    const bal = getBalance();
+    if (bal !== null) renderBalanceChip(bal - sessionCost);
   }, 250);
 }
 
@@ -998,8 +1020,29 @@ function openMenu() {
 }
 
 // ----- Owner access control (allowlist management) -------------------------
+// Every account that signs in registers itself here (RLS: users can only
+// write their own row; only the owner can read the registry). The owner's
+// Access panel lists them with one-tap Allow.
+async function recordSignin(user) {
+  if (!isAuthRequired() || !currentUserId) return;
+  try {
+    await fetch(`${config.supabaseUrl}/rest/v1/app_signins?on_conflict=email`, {
+      method: "POST",
+      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        email: currentUserEmail,
+        name: user.user_metadata?.full_name || null,
+        last_seen: new Date().toISOString(),
+      }),
+    });
+  } catch {
+    /* table may not exist yet — sign-in still works */
+  }
+}
+
 async function renderAllowlist() {
   els.allowList.innerHTML = '<div class="menu__empty">Loading…</div>';
+  els.signinList.innerHTML = '<div class="menu__empty">Loading…</div>';
   try {
     const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist?select=email&order=created_at.desc`, {
       headers: { apikey: config.supabaseAnonKey },
@@ -1007,6 +1050,7 @@ async function renderAllowlist() {
     if (res.status === 404) {
       els.allowList.innerHTML =
         '<div class="menu__empty">Run <code>supabase/allowlist.sql</code> once to enable.</div>';
+      els.signinList.innerHTML = "";
       return;
     }
     const rows = res.ok ? await res.json() : [];
@@ -1026,13 +1070,51 @@ async function renderAllowlist() {
       row.querySelector(".history-item__del").addEventListener("click", () => removeAllowedEmail(r.email));
       els.allowList.append(row);
     }
+    renderSigninList(new Set(rows.map((r) => String(r.email).toLowerCase())));
   } catch {
     els.allowList.innerHTML = '<div class="menu__empty">Could not load the list.</div>';
+    els.signinList.innerHTML = "";
   }
 }
 
-async function addAllowedEmail() {
-  const email = els.allowInput.value.trim().toLowerCase();
+// Accounts that signed in but aren't approved yet, each with an Allow button.
+async function renderSigninList(allowedSet) {
+  try {
+    const res = await fetch(
+      `${config.supabaseUrl}/rest/v1/app_signins?select=email,name,last_seen&order=last_seen.desc&limit=100`,
+      { headers: await cloudHeaders() }
+    );
+    if (!res.ok) {
+      els.signinList.innerHTML = '<div class="menu__empty">No sign-in registry yet.</div>';
+      return;
+    }
+    const signins = await res.json();
+    const pending = signins.filter(
+      (s) => !allowedSet.has(String(s.email).toLowerCase()) && String(s.email).toLowerCase() !== config.ownerEmail
+    );
+    els.signinList.innerHTML = "";
+    if (!pending.length) {
+      els.signinList.innerHTML = '<div class="menu__empty">No one is waiting for approval.</div>';
+      return;
+    }
+    for (const s of pending) {
+      const row = document.createElement("div");
+      row.className = "history-item";
+      const when = s.last_seen ? new Date(s.last_seen).toLocaleString() : "";
+      row.innerHTML = `<div class="history-item__top"><span class="history-item__lang">${escapeHtml(
+        s.email
+      )}</span><span class="history-item__meta"><button class="chip chip--mini history-item__allow">✓ Allow</button></span></div>
+      <div class="history-item__meta">${escapeHtml(s.name || "")}${s.name ? " · " : ""}${escapeHtml(when)}</div>`;
+      row.querySelector(".history-item__allow").addEventListener("click", () => allowEmail(s.email));
+      els.signinList.append(row);
+    }
+  } catch {
+    els.signinList.innerHTML = '<div class="menu__empty">Could not load sign-ins.</div>';
+  }
+}
+
+async function allowEmail(email) {
+  email = String(email || "").trim().toLowerCase();
   if (!email || !email.includes("@")) {
     showToast("Enter a valid email.");
     return;
@@ -1045,12 +1127,17 @@ async function addAllowedEmail() {
     });
     if (res.status === 404) return showToast("Run supabase/allowlist.sql first.");
     if (!res.ok) throw new Error("HTTP " + res.status);
-    els.allowInput.value = "";
     showToast("Allowed " + email, true);
     renderAllowlist();
   } catch (err) {
     showToast("Could not add: " + err.message);
   }
+}
+
+async function addAllowedEmail() {
+  const email = els.allowInput.value.trim().toLowerCase();
+  await allowEmail(email);
+  els.allowInput.value = "";
 }
 
 async function removeAllowedEmail(email) {
@@ -1308,6 +1395,7 @@ function promptSetBalance() {
 }
 
 function renderBalance() {
+  renderBalanceChip();
   const bal = getBalance();
   const spent = getSpentTotal();
   els.balSpent.textContent = `$${spent.toFixed(3)} used`;
@@ -1326,6 +1414,22 @@ function renderBalance() {
   const level = bal <= 1 ? "low" : bal <= initial * 0.2 ? "warn" : "ok";
   els.balRemaining.className = "balance__remaining balance__remaining--" + level;
   els.balBar.dataset.level = level;
+}
+
+// The always-visible topbar chip. Pass liveRemaining to show a live countdown
+// mid-session (stored balance minus the running session's cost so far).
+function renderBalanceChip(liveRemaining = null) {
+  const bal = getBalance();
+  if (bal === null) {
+    els.balChipText.textContent = "Set balance";
+    els.balChip.dataset.level = "unset";
+    return;
+  }
+  const rem = Math.max(0, liveRemaining !== null ? liveRemaining : bal);
+  const initial = parseFloat(localStorage.getItem("lt-balance-initial") || String(bal)) || bal;
+  const level = rem <= 0.005 ? "empty" : rem <= 1 ? "low" : rem <= initial * 0.2 ? "warn" : "ok";
+  els.balChipText.textContent = rem <= 0.005 ? "$0 — Top up" : `$${rem.toFixed(2)}`;
+  els.balChip.dataset.level = level;
 }
 
 function escapeHtml(s) {

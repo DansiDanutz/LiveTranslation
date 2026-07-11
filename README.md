@@ -100,7 +100,9 @@ That's it — open your `*.vercel.app` URL and start translating.
   and the app tells you to tap the mic to reconnect
 - **Two-way conversation mode** — two people, two languages, push-to-talk per side
 - **AI session summaries** on stop + **"Summary of all"** (language selectable, default Romanian)
-- **OpenAI balance tracker** (estimate) with low-balance warnings + a top-up link
+- **OpenAI balance tracker** (estimate) — always visible in the top bar with a
+  live countdown while translating, color warnings, and one-tap **Top up** when
+  it reaches $0 (plus low-balance warnings + a top-up link in the menu)
 - **PDF export** of a session (transcript + summary) and optional **cloud sync** of history
 - Source + target **live captions** (large, readable, scrollable)
 - **Presentation mode** — fullscreen captions for translating to a room
@@ -169,7 +171,10 @@ Because the app spends a real OpenAI key, every API route is guarded server-side
 Out of the box **only the owner can spend**. The owner can whitelist others
 **from inside the app** (Menu → **Access**) — run
 [`supabase/allowlist.sql`](supabase/allowlist.sql) once to enable that
-(owner-only writes, enforced by RLS). Listeners on a `/?live=…` link are
+(owner-only writes, enforced by RLS). Every account that signs in registers
+itself in a **sign-in registry** (`app_signins`; users write only their own
+row, only the owner can read) and shows up in the owner's Access panel under
+**"Signed in — waiting for approval"** with a one-tap **✓ Allow** button. Listeners on a `/?live=…` link are
 **read-only** and never hit these routes. Responses also send standard security
 headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
 `Permissions-Policy`).

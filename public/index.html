@@ -75,6 +75,9 @@
         </div>
 
         <div class="topbar__right">
+          <button id="bal-chip" class="bal-chip" data-level="unset" title="OpenAI balance (estimate) — tap to manage">
+            💳 <span id="bal-chip-text">Set balance</span>
+          </button>
           <button id="theme-btn" class="icon-btn" title="Toggle theme" aria-label="Toggle light/dark theme">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" stroke-linecap="round" stroke-linejoin="round" />
@@ -306,6 +309,8 @@
               <button class="ask__send" type="submit">Add</button>
             </form>
             <div id="allow-list" class="menu__list"></div>
+            <div class="menu__section-title">Signed in — waiting for approval</div>
+            <div id="signin-list" class="menu__list"></div>
           </section>
 
           <!-- History -->
