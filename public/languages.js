@@ -41,6 +41,7 @@ export const INPUT_LANGUAGES = [
   { code: "ja", name: "Japanese", flag: "🇯🇵" },
   { code: "ko", name: "Korean", flag: "🇰🇷" },
   { code: "pt", name: "Portuguese", flag: "🇵🇹" },
+  { code: "ro", name: "Romanian", flag: "🇷🇴" },
   { code: "ru", name: "Russian", flag: "🇷🇺" },
   { code: "es", name: "Spanish", flag: "🇪🇸" },
   { code: "th", name: "Thai", flag: "🇹🇭" },

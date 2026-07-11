@@ -3,7 +3,7 @@
 // effect immediately), falling back to cache only when offline. API requests
 // are never intercepted.
 
-const CACHE = "lt-v3";
+const CACHE = "lt-v4";
 const ASSETS = [
   "/",
   "/index.html",

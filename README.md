@@ -6,7 +6,10 @@ powered by OpenAI's [`gpt-realtime-translate`](https://developers.openai.com/api
 model, connected over **WebRTC**.
 
 - **70+ input languages → 13 output languages** (auto source detection)
-- **Live dual captions** (your speech + the translation)
+- **Live dual captions** (the speech heard + the translation) — like subtitles
+- **Room mode** (default) captures the people **around** you in noisy venues:
+  the browser's close-talk voice processing is disabled and the model uses
+  far-field noise reduction. Switch to **Close-talk** when speaking into the phone.
 - **Auto-playing translated voice**, pace-matched and low latency
 - **Google sign-in** via Supabase (free)
 - **Deploys to Vercel** — your API key never reaches the browser

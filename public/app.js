@@ -60,6 +60,7 @@ const els = {
   fontInc: $("#font-inc"),
   fontDec: $("#font-dec"),
   micDevice: $("#mic-device"),
+  listenModeBtn: $("#listen-mode"),
   stage: $("#stage"),
   // Left menu
   menuBtn: $("#menu-btn"),
@@ -108,6 +109,7 @@ const HISTORY_KEY = "lt-history";
 const THEME_KEY = "lt-theme";
 const FONT_KEY = "lt-font-scale";
 const DEVICE_KEY = "lt-mic-device";
+const LISTEN_MODE_KEY = "lt-listen-mode"; // "room" (people around you) | "close" (speak into phone)
 const BAL_KEY = "lt-balance";
 const SPENT_KEY = "lt-spent-total";
 const SUMMARY_LANG_KEY = "lt-summary-lang";
@@ -227,7 +229,7 @@ function populateLanguages() {
     els.targetSelect.append(opt);
   }
   els.sourceSelect.value = "auto";
-  els.targetSelect.value = "es";
+  els.targetSelect.value = "en";
 
   // Conversation: both sides must be output-capable languages.
   for (const sel of [els.personA, els.personB]) {
@@ -254,6 +256,13 @@ function restorePreferences() {
   const saved = JSON.parse(localStorage.getItem("lt-prefs") || "{}");
   if (saved.source) els.sourceSelect.value = saved.source;
   if (saved.target) els.targetSelect.value = saved.target;
+  // One-time migration: the app used to default to Spanish output; reset the
+  // target to English once so existing devices get the intended default.
+  if (!localStorage.getItem("lt-prefs-v2")) {
+    els.targetSelect.value = "en";
+    localStorage.setItem("lt-prefs", JSON.stringify({ ...saved, target: "en" }));
+    localStorage.setItem("lt-prefs-v2", "1");
+  }
   if (saved.personA) els.personA.value = saved.personA;
   if (saved.personB) els.personB.value = saved.personB;
   els.appView.setAttribute("data-mode", saved.mode === "conversation" ? "conversation" : "translate");
@@ -337,6 +346,10 @@ function wireEvents() {
 
   // Presentation (fullscreen) mode
   els.presentBtn.addEventListener("click", togglePresent);
+
+  // Listen mode (room vs close-talk)
+  els.listenModeBtn.addEventListener("click", toggleListenMode);
+  renderListenMode();
 
   // Microphone device
   els.micDevice.addEventListener("change", () => {
@@ -453,6 +466,34 @@ function togglePresent() {
   }
 }
 
+// ----- Listen mode (room vs close-talk) -------------------------------------
+// "room" (default): hear the people around you — raw mic + far-field cleanup.
+// "close": speak directly into the phone — voice-optimized processing.
+function listenMode() {
+  return localStorage.getItem(LISTEN_MODE_KEY) === "close" ? "close" : "room";
+}
+
+function renderListenMode() {
+  const room = listenMode() === "room";
+  els.listenModeBtn.textContent = room ? "🎧 Room mode" : "🗣️ Close-talk";
+  els.listenModeBtn.setAttribute("data-on", String(room));
+  els.listenModeBtn.title = room
+    ? "Room mode: captures the people around you (best for venues). Tap for close-talk."
+    : "Close-talk: best when speaking directly into the phone. Tap for room mode.";
+}
+
+async function toggleListenMode() {
+  localStorage.setItem(LISTEN_MODE_KEY, listenMode() === "room" ? "close" : "room");
+  renderListenMode();
+  showToast(
+    listenMode() === "room"
+      ? "Room mode — listening to the people around you."
+      : "Close-talk — speak directly into the phone.",
+    true
+  );
+  if (listening) await restartSession();
+}
+
 // ----- Microphone devices --------------------------------------------------
 async function refreshMicDevices() {
   if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -527,12 +568,23 @@ async function startListening() {
     setStatus("connecting", "Connecting…");
     sessionTarget = currentTarget();
 
+    // Room mode captures the people around you (noisy venues); close-talk is
+    // for speaking directly into the phone. Conversation mode is push-to-talk
+    // into the phone, so it always uses close-talk processing.
+    const conversation = els.appView.getAttribute("data-mode") === "conversation";
+    const roomMode = !conversation && listenMode() === "room";
+
     // 1) Mint a short-lived token for this translation session.
-    const token = await mintToken(sessionTarget);
+    const token = await mintToken(sessionTarget, roomMode ? "far_field" : "near_field");
 
     // 2) Capture mic audio (from the chosen input device, if any).
+    // In room mode, disable the browser's voice processing: echo cancellation
+    // and noise suppression are tuned for a mouth next to the mic and will
+    // strip exactly the distant/ambient speech we want to translate.
     const deviceId = localStorage.getItem(DEVICE_KEY) || "";
-    const audioConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+    const audioConstraints = roomMode
+      ? { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      : { channelCount: 1, echoCancellation: true, noiseSuppression: true };
     if (deviceId) audioConstraints.deviceId = { exact: deviceId };
     localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
     // Device labels are only exposed once permission is granted — refresh now.
@@ -551,7 +603,10 @@ async function startListening() {
     // Transcript events flow over this data channel.
     dataChannel = pc.createDataChannel("oai-events");
     dataChannel.onmessage = (e) => handleEvent(JSON.parse(e.data));
-    dataChannel.onopen = () => setStatus("listening", "Listening");
+    dataChannel.onopen = () => {
+      setStatus("listening", "Listening");
+      armNoSpeechHint();
+    };
 
     pc.onconnectionstatechange = () => {
       if (["failed", "disconnected", "closed"].includes(pc.connectionState) && listening) {
@@ -584,6 +639,7 @@ async function startListening() {
     updateConvButtons();
     startTimer();
     clearCaptions();
+    acquireWakeLock(); // keep the screen (and mic) alive during long sessions
   } catch (err) {
     console.error(err);
     setStatus("error", "Error");
@@ -592,7 +648,7 @@ async function startListening() {
         ? "Microphone permission denied. Allow mic access and try again."
         : err.message || "Could not start translation."
     );
-    await stopListening();
+    await stopListening(false); // failed start — nothing to save or charge
   }
 }
 
@@ -613,12 +669,15 @@ async function stopListening(save = true) {
       });
     }
   }
+  startTime = 0; // so an aborted next start can't re-save/re-charge this session
   listening = false;
   els.mic.setAttribute("data-active", "false");
   els.micHint.textContent = "Tap to start translating";
   stopTimer();
   stopLevelMeter();
   updateLevel(0);
+  clearTimeout(noSpeechTimer);
+  releaseWakeLock();
 
   try {
     dataChannel?.close();
@@ -640,12 +699,12 @@ async function stopListening(save = true) {
   }
 }
 
-async function mintToken(language) {
+async function mintToken(language, noiseReduction) {
   const accessToken = await getAccessToken();
   const res = await fetch("/api/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ language, accessToken }),
+    body: JSON.stringify({ language, noiseReduction, accessToken }),
   });
   const data = await res.json();
   if (!res.ok || !data.value) {
@@ -656,22 +715,76 @@ async function mintToken(language) {
 
 // ----- Events --------------------------------------------------------------
 function handleEvent(evt) {
-  switch (evt.type) {
-    case "session.input_transcript.delta":
-      sourceText += evt.delta || "";
-      appendCaption(els.sourceCaption, evt.delta || "");
-      broadcastCaption("source", evt.delta || "");
-      break;
-    case "session.output_transcript.delta":
-      targetText += evt.delta || "";
-      appendCaption(els.targetCaption, evt.delta || "");
-      broadcastCaption("target", evt.delta || "");
-      break;
-    case "error":
-      showToast(evt.error?.message || "Translation error.");
-      break;
+  const type = evt.type || "";
+
+  if (type === "error") {
+    console.error("[oai-events] error", evt);
+    showToast(evt.error?.message || "Translation error.");
+    return;
+  }
+  if (type === "session.closed") {
+    if (listening) {
+      setStatus("error", "Session closed");
+      showToast("The translation session closed. Tap the mic to reconnect.");
+    }
+    return;
+  }
+
+  // Transcript deltas. Match loosely on input/output so caption streaming
+  // survives event-name variations between API versions.
+  if (typeof evt.delta === "string" && type.endsWith(".delta")) {
+    if (type.includes("input")) {
+      cancelNoSpeechHint();
+      sourceText += evt.delta;
+      appendCaption(els.sourceCaption, evt.delta);
+      broadcastCaption("source", evt.delta);
+    } else if (type.includes("output") || type.includes("response")) {
+      cancelNoSpeechHint();
+      targetText += evt.delta;
+      appendCaption(els.targetCaption, evt.delta);
+      broadcastCaption("target", evt.delta);
+    }
+    return;
+  }
+
+  // Anything else is useful when diagnosing "connected but silent" sessions.
+  console.debug("[oai-events]", evt);
+}
+
+// If we're connected but nothing has been transcribed for a while, the mic is
+// probably not picking up the room — tell the user instead of staying blank.
+let noSpeechTimer = null;
+function armNoSpeechHint() {
+  clearTimeout(noSpeechTimer);
+  noSpeechTimer = setTimeout(() => {
+    if (!listening || sourceText || targetText) return;
+    els.micHint.textContent = "No speech detected yet — watch the level bar and move closer to the speakers.";
+    showToast("Connected, but no speech picked up yet. Check the mic level bar; move the phone closer to the people talking.");
+  }, 12000);
+}
+function cancelNoSpeechHint() {
+  clearTimeout(noSpeechTimer);
+  noSpeechTimer = null;
+}
+
+// ----- Screen wake lock (mobile: locking the screen kills the mic) ---------
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    wakeLock = (await navigator.wakeLock?.request("screen")) || null;
+  } catch {
+    /* not supported / denied — non-fatal */
   }
 }
+function releaseWakeLock() {
+  try {
+    wakeLock?.release();
+  } catch {}
+  wakeLock = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (listening && document.visibilityState === "visible") acquireWakeLock();
+});
 
 // ----- Mic level meter -----------------------------------------------------
 function startLevelMeter(stream) {
@@ -728,7 +841,8 @@ function appendCaption(node, text, system = false) {
 function clearCaptions() {
   sourceText = "";
   targetText = "";
-  els.sourceCaption.innerHTML = '<span class="caption__placeholder">Your speech appears here…</span>';
+  els.sourceCaption.innerHTML =
+    '<span class="caption__placeholder">The speech around you appears here, in its own language…</span>';
   els.targetCaption.innerHTML = '<span class="caption__placeholder">Translation appears here…</span>';
 }
 

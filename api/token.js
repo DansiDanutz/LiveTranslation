@@ -18,7 +18,10 @@ export default async function handler(req, res) {
   }
 
   const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-  const language = body.language || "es";
+  const language = body.language || "en";
+  // "far_field" suits listening to people around you (noisy rooms, events);
+  // "near_field" suits speaking directly into the phone.
+  const noiseReduction = body.noiseReduction === "near_field" ? "near_field" : "far_field";
 
   // Auth + email allowlist + per-user daily cap + global budget stop.
   const gate = await guardTranslation(body.accessToken);
@@ -38,7 +41,18 @@ export default async function handler(req, res) {
         "OpenAI-Safety-Identifier": safetyId,
       },
       body: JSON.stringify({
-        session: { model: MODEL, audio: { output: { language } } },
+        session: {
+          model: MODEL,
+          audio: {
+            // Without an input transcription model the session never emits
+            // session.input_transcript.delta events — i.e. no source captions.
+            input: {
+              transcription: { model: "gpt-realtime-whisper" },
+              noise_reduction: { type: noiseReduction },
+            },
+            output: { language },
+          },
+        },
       }),
     });
 

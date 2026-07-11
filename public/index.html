@@ -130,9 +130,9 @@
           </svg>
         </button>
         <div class="card caption caption--source">
-          <div class="caption__head"><span class="tag"></span> You said</div>
+          <div class="caption__head"><span class="tag"></span> Transcript — what they say</div>
           <div id="source-caption" class="caption__body" aria-live="polite">
-            <span class="caption__placeholder">Your speech appears here…</span>
+            <span class="caption__placeholder">The speech around you appears here, in its own language…</span>
           </div>
         </div>
         <div class="card caption caption--target">
@@ -170,6 +170,8 @@
         <div id="mic-hint" class="dock__hint">Tap to start translating</div>
 
         <div class="toolbar">
+          <button id="listen-mode" class="chip" data-on="true"
+                  title="Room mode: captures the people around you (best for venues). Tap for close-talk.">🎧 Room mode</button>
           <button id="mute-audio" class="chip" data-muted="false">🔊 Audio on</button>
           <label class="chip chip--range">
             🔈
