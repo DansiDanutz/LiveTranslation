@@ -136,7 +136,7 @@ const INSTALL_TIP_KEY = "lt-install-tip-shown";
 // one of the 13 translation OUTPUT languages, so this is the way to get
 // Romanian out of the app).
 const SUMMARY_LANGUAGES = [
-  "Romanian", "English", "Spanish", "French", "German", "Italian",
+  "Romanian", "Turkish", "English", "Spanish", "French", "German", "Italian",
   "Portuguese", "Russian", "Chinese", "Japanese", "Arabic", "Hindi",
 ];
 
@@ -833,7 +833,10 @@ async function generateRomanianTranscript(entry) {
   try {
     const romanian = await summarize(text, "translate", "Romanian");
     patchHistory(entry.id, { romanian });
-    if (lastSession && lastSession.id === entry.id) lastSession = { ...lastSession, romanian };
+    // Merge via storage (the summary runs concurrently), then sync to cloud.
+    const updated = historyItem(entry.id) || { ...entry, romanian };
+    if (lastSession && lastSession.id === entry.id) lastSession = updated;
+    cloudSyncUp(updated);
     openRoModal(romanian);
   } catch (err) {
     openRoModal("Could not translate into Romanian: " + err.message);
@@ -1008,6 +1011,10 @@ function saveHistory(entry) {
 function patchHistory(id, fields) {
   const items = loadHistory().map((i) => (i.id === id ? { ...i, ...fields } : i));
   localStorage.setItem(HISTORY_KEY, JSON.stringify(items));
+}
+
+function historyItem(id) {
+  return loadHistory().find((i) => i.id === id);
 }
 
 // ----- Left menu -----------------------------------------------------------
@@ -1321,7 +1328,9 @@ async function generateSessionSummary(entry) {
   try {
     const summary = await summarize(text, "session", summaryLanguage());
     patchHistory(entry.id, { summary });
-    lastSession = { ...entry, summary };
+    // Re-read the stored item: the Romanian translation runs concurrently and
+    // may have landed first — merging via storage avoids clobbering it.
+    lastSession = historyItem(entry.id) || { ...entry, summary };
     cloudSyncUp(lastSession);
     showSummary(summary);
   } catch (err) {
@@ -1455,20 +1464,25 @@ async function cloudHeaders() {
 async function cloudSyncUp(entry) {
   if (!cloudReady()) return;
   try {
-    const res = await fetch(`${config.supabaseUrl}/rest/v1/sessions?on_conflict=user_id,client_id`, {
-      method: "POST",
-      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({
-        user_id: currentUserId,
-        client_id: entry.id,
-        source_text: entry.sourceText || "",
-        target_text: entry.targetText || "",
-        summary: entry.summary || null,
-        target_language: entry.target,
-        duration_seconds: entry.seconds || 0,
-        created_at: new Date(entry.ts).toISOString(),
-      }),
-    });
+    const url = `${config.supabaseUrl}/rest/v1/sessions?on_conflict=user_id,client_id`;
+    const headers = { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" };
+    const payload = {
+      user_id: currentUserId,
+      client_id: entry.id,
+      source_text: entry.sourceText || "",
+      target_text: entry.targetText || "",
+      summary: entry.summary || null,
+      romanian_text: entry.romanian || null,
+      target_language: entry.target,
+      duration_seconds: entry.seconds || 0,
+      created_at: new Date(entry.ts).toISOString(),
+    };
+    let res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+    if (res.status === 400) {
+      // Older sessions table without the romanian_text column — sync the rest.
+      delete payload.romanian_text;
+      res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+    }
     if (res.status === 404) cloudAvailable = false;
   } catch {
     /* offline — local history still holds it */
@@ -1506,9 +1520,12 @@ function mergeCloudRows(rows) {
         sourceText: r.source_text || "",
         targetText: r.target_text || "",
         summary: r.summary || undefined,
+        romanian: r.romanian_text || undefined,
       });
-    } else if (r.summary && !byId.get(id).summary) {
-      byId.get(id).summary = r.summary;
+    } else {
+      const cur = byId.get(id);
+      if (r.summary && !cur.summary) cur.summary = r.summary;
+      if (r.romanian_text && !cur.romanian) cur.romanian = r.romanian_text;
     }
   }
   const merged = Array.from(byId.values()).sort((a, b) => b.ts - a.ts).slice(0, 50);
