@@ -75,6 +75,13 @@ const els = {
   allowForm: $("#allow-form"),
   allowInput: $("#allow-input"),
   allowList: $("#allow-list"),
+  // Romanian transcript dialog
+  roModal: $("#ro-modal"),
+  roModalBackdrop: $("#ro-modal-backdrop"),
+  roModalBody: $("#ro-modal-body"),
+  roModalClose: $("#ro-modal-close"),
+  roModalOk: $("#ro-modal-ok"),
+  roModalCopy: $("#ro-modal-copy"),
   // Summaries
   summaryCard: $("#summary-card"),
   summaryBody: $("#summary-body"),
@@ -308,8 +315,9 @@ function populateLanguages() {
     opt.textContent = `${lang.flag}  ${lang.name}`;
     els.targetSelect.append(opt);
   }
-  els.sourceSelect.value = "auto";
-  els.targetSelect.value = "es";
+  // Default flow: speak Turkish → hear English (saved preferences override).
+  els.sourceSelect.value = "tr";
+  els.targetSelect.value = "en";
 
   // Conversation: both sides must be output-capable languages.
   for (const sel of [els.personA, els.personB]) {
@@ -409,6 +417,17 @@ function wireEvents() {
     localStorage.setItem(VOLUME_KEY, els.volume.value);
   });
 
+  // Romanian transcript dialog
+  els.roModalClose.addEventListener("click", closeRoModal);
+  els.roModalOk.addEventListener("click", closeRoModal);
+  els.roModalBackdrop.addEventListener("click", closeRoModal);
+  els.roModalCopy.addEventListener("click", () => {
+    navigator.clipboard.writeText(els.roModalBody.textContent || "").then(
+      () => showToast("Romanian text copied", true),
+      () => showToast("Could not copy")
+    );
+  });
+
   // First-run welcome
   els.welcomeDismiss.addEventListener("click", () => {
     localStorage.setItem(WELCOME_KEY, "1");
@@ -495,6 +514,7 @@ function wireEvents() {
   els.balSet.addEventListener("click", promptSetBalance);
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !els.roModal.hidden) return closeRoModal();
     if (e.key === "Escape" && !els.sideMenu.hidden) closeMenu();
     if (e.code === "Space" && !["SELECT", "INPUT", "BUTTON"].includes(e.target.tagName)) {
       e.preventDefault();
@@ -779,7 +799,36 @@ async function stopListening(save = true) {
     lastSession = savedEntry;
     cloudSyncUp(savedEntry);
     generateSessionSummary(savedEntry); // auto-summarize the session that just ended
+    generateRomanianTranscript(savedEntry); // auto-translate the session into Romanian
   }
+}
+
+// ----- Romanian transcript dialog -------------------------------------------
+// After every session, the translated (English) transcript is also translated
+// into Romanian and shown in a dialog; the text is stored on the history entry
+// so it can be reopened any time from the 🇷🇴 button in History.
+async function generateRomanianTranscript(entry) {
+  if (!config.keyConfigured) return;
+  const text = (entry.targetText || entry.sourceText || "").trim();
+  if (!text) return;
+  openRoModal("Se traduce în română…"); // "Translating into Romanian…"
+  try {
+    const romanian = await summarize(text, "translate", "Romanian");
+    patchHistory(entry.id, { romanian });
+    if (lastSession && lastSession.id === entry.id) lastSession = { ...lastSession, romanian };
+    openRoModal(romanian);
+  } catch (err) {
+    openRoModal("Could not translate into Romanian: " + err.message);
+  }
+}
+
+function openRoModal(text) {
+  els.roModalBody.textContent = text;
+  els.roModal.hidden = false;
+}
+
+function closeRoModal() {
+  els.roModal.hidden = true;
 }
 
 async function mintToken(language) {
@@ -1048,10 +1097,13 @@ function renderHistory() {
     const summaryHtml = item.summary
       ? `<div class="history-item__summary">${escapeHtml(item.summary)}</div>`
       : "";
+    const roBtn = item.romanian
+      ? '<button class="history-item__ro chip chip--mini" title="Romanian transcript">🇷🇴 RO</button> · '
+      : "";
     card.innerHTML = `
       <div class="history-item__top">
         <span class="history-item__lang">→ ${escapeHtml(outputLanguageName(item.target))}</span>
-        <span class="history-item__meta">${dur} · <button class="history-item__del" title="Delete">✕</button></span>
+        <span class="history-item__meta">${roBtn}${dur} · <button class="history-item__del" title="Delete">✕</button></span>
       </div>
       <div class="history-item__meta">${escapeHtml(date)}</div>
       <div class="history-item__preview">${escapeHtml(item.targetText || item.sourceText || "")}</div>
@@ -1059,6 +1111,10 @@ function renderHistory() {
     card.querySelector(".history-item__del").addEventListener("click", (e) => {
       e.stopPropagation();
       deleteHistoryItem(item.id);
+    });
+    card.querySelector(".history-item__ro")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openRoModal(item.romanian);
     });
     card.addEventListener("click", () => viewHistoryItem(item));
     els.historyList.append(card);
@@ -1385,6 +1441,7 @@ function exportPdf(s) {
       ${s.summary ? `<h2>Summary</h2><div class="sum">${esc(s.summary)}</div>` : ""}
       <h2>Spoken</h2><div class="box">${esc(s.sourceText) || "—"}</div>
       <h2>Translation</h2><div class="box">${esc(s.targetText) || "—"}</div>
+      ${s.romanian ? `<h2>Romanian</h2><div class="sum">${esc(s.romanian)}</div>` : ""}
       <footer>Generated by LiveTranslation</footer>
       <script>window.onload=function(){setTimeout(function(){window.print()},250)}</script>
     </body></html>`

@@ -110,6 +110,9 @@ That's it — open your `*.vercel.app` URL and start translating.
 - **Session history** — past sessions auto-saved on-device; reopen or delete
 - **Installable app (PWA)** — one-tap **Install** button (Menu → Get the app) with
   real home-screen icons on Android & iPhone, offline app shell
+- **Turkish → English by default** (saved preferences override), plus an automatic
+  **Romanian transcript** of every session shown in a closable dialog — stored in
+  History (reopen via the 🇷🇴 button) and included in the PDF export
 - **Language swap** + remembers your last-used languages
 - **Mic level meter** and live **status** indicator
 - **Captions-only mode** (mute translated audio) + volume control

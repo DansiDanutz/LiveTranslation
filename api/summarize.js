@@ -19,12 +19,14 @@ export default async function handler(req, res) {
   const text = String(body.text || "").slice(0, 24000).trim();
   if (!text) return res.status(400).json({ error: "Nothing to summarize." });
 
-  const mode = ["overall", "actions"].includes(body.mode) ? body.mode : "session";
+  const mode = ["overall", "actions", "translate"].includes(body.mode) ? body.mode : "session";
   const language = (body.language || "").trim();
 
   const writeIn = language ? ` Write the output in ${language}.` : "";
   let system;
-  if (mode === "overall") {
+  if (mode === "translate") {
+    system = `You are a professional translator. Translate the user's text into ${language || "Romanian"}. Preserve the meaning, tone, and paragraph breaks. Output ONLY the translation — no preamble, no notes.`;
+  } else if (mode === "overall") {
     system = `You receive several short summaries, each from a separate live speech-translation session. Produce ONE concise overall summary that synthesizes the recurring themes, key points, and any decisions across all sessions.${writeIn} Format: a one-line 'TL;DR:' followed by 3-6 short bullet points starting with '- '. Be faithful; do not invent details.`;
   } else if (mode === "actions") {
     system = `Extract practical ACTION ITEMS and DECISIONS from this translation session transcript.${writeIn} Format exactly: a line 'Action items:' then '- ' bullets (each a clear task, include who/when if stated); then a line 'Decisions:' then '- ' bullets. If a section has none, write '- none'. Be faithful; do not invent.`;
@@ -43,7 +45,8 @@ export default async function handler(req, res) {
           { role: "user", content: text },
         ],
         temperature: 0.3,
-        max_tokens: 450,
+        // Full-transcript translations need room; summaries stay short.
+        max_tokens: mode === "translate" ? 2500 : 450,
       }),
     });
     const data = await r.json();
