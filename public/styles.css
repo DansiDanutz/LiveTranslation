@@ -1516,3 +1516,17 @@ button.chip:hover {
 @keyframes bal-pulse {
   50% { opacity: 0.65; }
 }
+
+/* ----- Install button — red, impossible to miss ---------------------------- */
+#install-btn {
+  background: linear-gradient(135deg, var(--c-danger), #ff8190);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+  font-size: var(--fs-md);
+  padding: var(--s-4);
+  box-shadow: 0 6px 20px rgba(255, 93, 108, 0.35);
+}
+#install-btn:hover {
+  background: linear-gradient(135deg, #ff4a5b, var(--c-danger));
+}
