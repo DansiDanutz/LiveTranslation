@@ -11,6 +11,7 @@ create table if not exists public.sessions (
   source_text text,
   target_text text,
   summary text,
+  romanian_text text,          -- per-session Romanian transcript (auto-generated)
   target_language text,
   duration_seconds integer default 0,
   created_at timestamptz not null default now()
