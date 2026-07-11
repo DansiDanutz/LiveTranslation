@@ -102,6 +102,7 @@ body {
 body {
   font-family: var(--font-sans);
   color: var(--c-text);
+  overflow-x: clip; /* nothing may widen the page beyond the phone screen */
   background:
     radial-gradient(1200px 600px at 80% -10%, rgba(109, 124, 255, 0.18), transparent 60%),
     radial-gradient(900px 500px at -10% 110%, rgba(56, 224, 200, 0.12), transparent 55%),
@@ -139,6 +140,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
+  flex-wrap: wrap; /* on narrow screens the right side wraps below the brand */
 }
 
 .brand {
@@ -604,6 +606,10 @@ button {
   display: flex;
   align-items: center;
   gap: var(--s-3);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
 }
 
 .user-chip {
@@ -1001,6 +1007,10 @@ button.chip:hover {
   flex-direction: column;
   gap: var(--s-3);
 }
+.menu__section + .menu__section {
+  border-top: 1px solid var(--c-border);
+  padding-top: var(--s-5);
+}
 .menu__section-title {
   display: flex;
   align-items: center;
@@ -1267,11 +1277,58 @@ button.chip:hover {
 
 /* ----- Responsive -------------------------------------------------------- */
 @media (max-width: 760px) {
+  /* Layout: tighter padding + notch-safe insets (viewport-fit=cover) */
+  .app {
+    padding: calc(var(--s-4) + env(safe-area-inset-top, 0px))
+      calc(var(--s-3) + env(safe-area-inset-right, 0px))
+      calc(var(--s-7) + env(safe-area-inset-bottom, 0px))
+      calc(var(--s-3) + env(safe-area-inset-left, 0px));
+    gap: var(--s-4);
+  }
+
+  /* Compact topbar that fits a phone in one or two tidy rows */
+  .topbar {
+    gap: var(--s-2);
+  }
+  .brand {
+    gap: var(--s-2);
+  }
+  .brand__mark {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--r-sm);
+  }
+  .brand__mark svg {
+    width: 18px;
+    height: 18px;
+  }
+  .brand__title {
+    font-size: var(--fs-md);
+  }
+  .brand__subtitle {
+    display: none;
+  }
+  .topbar__right {
+    gap: var(--s-2);
+  }
+  .user-chip__name {
+    max-width: 82px;
+  }
+  .pill {
+    padding: var(--s-1) var(--s-2);
+    font-size: var(--fs-xs);
+  }
+  .bal-chip {
+    padding: 5px 10px;
+  }
+
+  /* Stacked language + caption panels */
   .live__stage {
     grid-template-columns: 1fr;
   }
   .controls {
     grid-template-columns: 1fr;
+    padding: var(--s-4);
   }
   .swap {
     justify-self: center;
@@ -1280,11 +1337,57 @@ button.chip:hover {
   .swap:hover {
     transform: rotate(270deg);
   }
+  .conv-arrow {
+    text-align: center;
+    transform: rotate(90deg);
+  }
   .stage {
     grid-template-columns: 1fr;
   }
+  .caption {
+    padding: var(--s-4);
+  }
   :root {
     --fs-caption: 1.35rem;
+  }
+
+  /* Dock + menus */
+  .mic {
+    width: 84px;
+    height: 84px;
+  }
+  .menu__panel {
+    width: 100vw;
+    border-right: none;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .modal__panel {
+    max-height: 88vh;
+  }
+  .summary-card__head {
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .device-select {
+    max-width: 100%;
+  }
+  .device-select .select {
+    max-width: 62vw;
+  }
+}
+
+/* Comfortable touch targets on touch devices */
+@media (pointer: coarse) {
+  .chip {
+    padding: var(--s-2) var(--s-4);
+    min-height: 40px;
+  }
+  .icon-btn {
+    width: 42px;
+    height: 42px;
+  }
+  .chip__mini {
+    min-height: 32px;
   }
 }
 
