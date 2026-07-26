@@ -1069,7 +1069,7 @@ async function renderAllowlist() {
   els.signinList.innerHTML = '<div class="menu__empty">Loading…</div>';
   try {
     const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist?select=email&order=created_at.desc`, {
-      headers: { apikey: config.supabaseAnonKey },
+      headers: await cloudHeaders(),
     });
     if (res.status === 404) {
       els.allowList.innerHTML =
