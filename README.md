@@ -166,12 +166,16 @@ Because the app spends a real OpenAI key, every API route is guarded server-side
 | `OWNER_EMAIL` | `semebitcoin@gmail.com` | Always allowed; the only admin who manages the in-app allowlist. |
 | `ALLOWED_EMAILS` | none | Extra static allowlist. `*` = anyone signed in; or a comma-separated list. |
 | `MAX_MINUTES_PER_USER_PER_DAY` | `0` (off) | Soft per-user daily cap on translation minutes. |
-| `DAILY_BUDGET_USD` | `0` (off) | Global daily budget stop (needs `SUPABASE_SERVICE_ROLE_KEY` to measure). |
+| `DAILY_BUDGET_USD` | `0` (off) | Global daily budget stop. |
+| `SUPABASE_SERVICE_ROLE_KEY` | none | Server-only key for the private in-app allowlist and global budget measurement. |
 
 Out of the box **only the owner can spend**. The owner can whitelist others
 **from inside the app** (Menu → **Access**) — run
 [`supabase/allowlist.sql`](supabase/allowlist.sql) once to enable that
-(owner-only writes, enforced by RLS). Every account that signs in registers
+(owner-only reads and writes, enforced by RLS). Its policy email must match
+`OWNER_EMAIL`, and the server needs `SUPABASE_SERVICE_ROLE_KEY` to authorize
+DB-backed entries. Without that key, only the owner and `ALLOWED_EMAILS`
+entries are accepted. Every account that signs in registers
 itself in a **sign-in registry** (`app_signins`; users write only their own
 row, only the owner can read) and shows up in the owner's Access panel under
 **"Signed in — waiting for approval"** with a one-tap **✓ Allow** button. Listeners on a `/?live=…` link are

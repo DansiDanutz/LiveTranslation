@@ -16,7 +16,13 @@ jobs:
           node-version: 20
 
       - name: Install app dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
 
       - name: Syntax check all JS
         run: |

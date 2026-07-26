@@ -11,11 +11,13 @@ create table if not exists public.app_allowlist (
 
 alter table public.app_allowlist enable row level security;
 
--- Anyone may READ the list (it's just a set of permitted emails; the server
--- needs to read it to enforce access).
+-- Only the owner may read the list in the browser. Server-side enforcement
+-- uses the service-role key, which bypasses RLS without exposing addresses.
 drop policy if exists "allowlist readable" on public.app_allowlist;
-create policy "allowlist readable"
-  on public.app_allowlist for select using (true);
+drop policy if exists "allowlist owner read" on public.app_allowlist;
+create policy "allowlist owner read"
+  on public.app_allowlist for select
+  using ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');
 
 -- Only the OWNER may modify the list.
 drop policy if exists "allowlist owner insert" on public.app_allowlist;
