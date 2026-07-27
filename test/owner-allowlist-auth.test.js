@@ -4,24 +4,23 @@ import test from "node:test";
 
 const appSource = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
-test("owner allowlist reads send the signed-in user's JWT", () => {
+test("owner allowlist UI uses the authenticated same-origin server endpoint", () => {
   const start = appSource.indexOf("async function renderAllowlist()");
   const end = appSource.indexOf("async function renderSigninList", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
 
   const renderAllowlist = appSource.slice(start, end);
-  assert.match(renderAllowlist, /app_allowlist\?select=email[^]*headers: await cloudHeaders\(\)/);
-  assert.doesNotMatch(renderAllowlist, /headers:\s*\{\s*apikey:\s*config\.supabaseAnonKey\s*\}/);
+  assert.match(renderAllowlist, /ownerAccess\("list-allowlist"\)/);
+  assert.doesNotMatch(renderAllowlist, /supabaseUrl|supabaseAnonKey|SERVICE_ROLE/i);
 });
 
-test("browser authentication uses only the anon key and the user's access token", () => {
-  const start = appSource.indexOf("async function cloudHeaders()");
-  const end = appSource.indexOf("async function cloudSyncUp", start);
-  const cloudHeaders = appSource.slice(start, end);
+test("owner endpoint calls carry the user's access token but no privileged credential", () => {
+  const start = appSource.indexOf("async function ownerAccess(");
+  const end = appSource.indexOf("function closeMenu", start);
+  const ownerAccess = appSource.slice(start, end);
 
-  assert.match(cloudHeaders, /const token = await getAccessToken\(\)/);
-  assert.match(cloudHeaders, /apikey: config\.supabaseAnonKey/);
-  assert.match(cloudHeaders, /Authorization: `Bearer \$\{token\}`/);
-  assert.doesNotMatch(cloudHeaders, /SERVICE_ROLE|service.role/i);
+  assert.match(ownerAccess, /const accessToken = await getAccessToken\(\)/);
+  assert.match(ownerAccess, /fetch\("\/api\/allowlist"/);
+  assert.doesNotMatch(ownerAccess, /apikey|SERVICE_ROLE|service.role/i);
 });
