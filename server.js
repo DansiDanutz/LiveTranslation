@@ -5,17 +5,15 @@
 // locally (so you can run `npm start` without the Vercel CLI) by mounting the
 // same /api handlers and serving /public.
 
+import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import dotenv from "dotenv";
 import tokenHandler from "./api/token.js";
 import configHandler from "./api/config.js";
 import summarizeHandler from "./api/summarize.js";
 import askHandler from "./api/ask.js";
 import allowlistHandler from "./api/allowlist.js";
-
-dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
