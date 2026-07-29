@@ -5,6 +5,7 @@
 
 import crypto from "node:crypto";
 import { guardTranslation } from "../lib/guard.js";
+import { outputLanguage, parseRequestBody } from "../lib/request.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = "gpt-realtime-translate";
@@ -13,12 +14,14 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+  const parsed = parseRequestBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const body = parsed.body;
+  const language = outputLanguage(body.language);
+  if (!language) return res.status(400).json({ error: "Unsupported output language." });
   if (!OPENAI_API_KEY) {
     return res.status(500).json({ error: "Server is missing OPENAI_API_KEY." });
   }
-
-  const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-  const language = body.language || "es";
 
   // Auth + email allowlist + per-user daily cap + global budget stop.
   const gate = await guardTranslation(body.accessToken);

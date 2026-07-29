@@ -11,22 +11,13 @@ create table if not exists public.app_allowlist (
 
 alter table public.app_allowlist enable row level security;
 
--- Anyone may READ the list (it's just a set of permitted emails; the server
--- needs to read it to enforce access).
+-- Owner management goes through /api/allowlist, which authenticates the
+-- configured OWNER_EMAIL server-side and uses the service-role key. No browser
+-- policy can safely depend on a Vercel environment variable.
 drop policy if exists "allowlist readable" on public.app_allowlist;
-create policy "allowlist readable"
-  on public.app_allowlist for select using (true);
-
--- Only the OWNER may modify the list.
+drop policy if exists "allowlist owner read" on public.app_allowlist;
 drop policy if exists "allowlist owner insert" on public.app_allowlist;
-create policy "allowlist owner insert"
-  on public.app_allowlist for insert
-  with check ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');
-
 drop policy if exists "allowlist owner delete" on public.app_allowlist;
-create policy "allowlist owner delete"
-  on public.app_allowlist for delete
-  using ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');
 
 -- Registry of accounts that signed in, so the owner can approve them from
 -- inside the app (Menu → Access → "Signed in — waiting for approval").
@@ -50,8 +41,5 @@ create policy "signins self update"
   using (lower(auth.jwt() ->> 'email') = email)
   with check (lower(auth.jwt() ->> 'email') = email);
 
--- Only the owner may read the registry.
+-- Only the server-side owner endpoint may read the registry.
 drop policy if exists "signins owner read" on public.app_signins;
-create policy "signins owner read"
-  on public.app_signins for select
-  using ((auth.jwt() ->> 'email') = 'semebitcoin@gmail.com');

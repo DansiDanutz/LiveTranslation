@@ -3,21 +3,25 @@
 // Reuses the server-side OpenAI key via the Chat Completions API.
 
 import { guardLight } from "../lib/guard.js";
+import { parseRequestBody, summaryLanguage } from "../lib/request.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SUMMARY_MODEL = process.env.SUMMARY_MODEL || "gpt-4o-mini";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  const parsed = parseRequestBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const body = parsed.body;
+  const language = summaryLanguage(body.language);
+  if (language === null) return res.status(400).json({ error: "Unsupported response language." });
   if (!OPENAI_API_KEY) return res.status(500).json({ error: "Server is missing OPENAI_API_KEY." });
 
-  const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
   const gate = await guardLight(body.accessToken);
   if (gate.error) return res.status(gate.status).json({ error: gate.error });
 
   const question = String(body.question || "").slice(0, 800).trim();
   const text = String(body.text || "").slice(0, 24000).trim();
-  const language = (body.language || "").trim();
   if (!question) return res.status(400).json({ error: "No question provided." });
   if (!text) return res.status(400).json({ error: "No transcript to search." });
 

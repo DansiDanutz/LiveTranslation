@@ -1068,9 +1068,7 @@ async function renderAllowlist() {
   els.allowList.innerHTML = '<div class="menu__empty">Loading…</div>';
   els.signinList.innerHTML = '<div class="menu__empty">Loading…</div>';
   try {
-    const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist?select=email&order=created_at.desc`, {
-      headers: { apikey: config.supabaseAnonKey },
-    });
+    const res = await ownerAccess("list-allowlist");
     if (res.status === 404) {
       els.allowList.innerHTML =
         '<div class="menu__empty">Run <code>supabase/allowlist.sql</code> once to enable.</div>';
@@ -1104,10 +1102,7 @@ async function renderAllowlist() {
 // Accounts that signed in but aren't approved yet, each with an Allow button.
 async function renderSigninList(allowedSet) {
   try {
-    const res = await fetch(
-      `${config.supabaseUrl}/rest/v1/app_signins?select=email,name,last_seen&order=last_seen.desc&limit=100`,
-      { headers: await cloudHeaders() }
-    );
+    const res = await ownerAccess("list-signins");
     if (!res.ok) {
       els.signinList.innerHTML = '<div class="menu__empty">No sign-in registry yet.</div>';
       return;
@@ -1144,11 +1139,7 @@ async function allowEmail(email) {
     return;
   }
   try {
-    const res = await fetch(`${config.supabaseUrl}/rest/v1/app_allowlist`, {
-      method: "POST",
-      headers: { ...(await cloudHeaders()), Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ email, added_by: currentUserEmail }),
-    });
+    const res = await ownerAccess("allow", { email });
     if (res.status === 404) return showToast("Run supabase/allowlist.sql first.");
     if (!res.ok) throw new Error("HTTP " + res.status);
     showToast("Allowed " + email, true);
@@ -1166,10 +1157,7 @@ async function addAllowedEmail() {
 
 async function removeAllowedEmail(email) {
   try {
-    const res = await fetch(
-      `${config.supabaseUrl}/rest/v1/app_allowlist?email=eq.${encodeURIComponent(email)}`,
-      { method: "DELETE", headers: await cloudHeaders() }
-    );
+    const res = await ownerAccess("remove", { email });
     if (!res.ok && res.status !== 404) throw new Error("HTTP " + res.status);
     showToast("Removed " + email, true);
     renderAllowlist();
@@ -1177,6 +1165,16 @@ async function removeAllowedEmail(email) {
     showToast("Could not remove: " + err.message);
   }
 }
+
+async function ownerAccess(action, fields = {}) {
+  const accessToken = await getAccessToken();
+  return fetch("/api/allowlist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, accessToken, ...fields }),
+  });
+}
+
 function closeMenu() {
   els.sideMenu.hidden = true;
 }
