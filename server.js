@@ -22,6 +22,12 @@ const PORT = process.env.PORT || 3000;
 
 const app = express();
 app.use(express.json());
+app.use((error, _req, res, next) => {
+  if (error?.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Request body must contain valid JSON." });
+  }
+  return next(error);
+});
 
 // Mount the Vercel serverless handlers (they use the req/res shape Express
 // also provides: req.body, res.status().json()).
@@ -42,6 +48,10 @@ if (!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)) {
   );
 }
 
-app.listen(PORT, () => {
-  console.log(`LiveTranslation (dev) running on http://localhost:${PORT}`);
-});
+export { app };
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  app.listen(PORT, () => {
+    console.log(`LiveTranslation (dev) running on http://localhost:${PORT}`);
+  });
+}
