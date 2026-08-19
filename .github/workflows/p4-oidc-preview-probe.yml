@@ -1,0 +1,38 @@
+name: P4.3 OIDC Preview Probe
+on:
+  push:
+    branches:
+      - p4-digitalperson-model-gateway
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Request GitHub OIDC token and probe Vercel Preview
+        id: probe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          audience='https://vercel.com/irises-projects-ce549f63'
+          oidc_json=$(curl -fsS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}")
+          oidc=$(printf '%s' "$oidc_json" | jq -r '.value')
+          echo "::add-mask::$oidc"
+          url='https://live-translation-git-p4-digital-7fd732-irises-projects-ce549f63.vercel.app/api/p4-key-probe'
+          tmp=$(mktemp)
+          code=$(curl -sS --max-time 20 -o "$tmp" -w '%{http_code}' -H "x-vercel-trusted-oidc-idp-token: $oidc" "$url" || true)
+          reached=false
+          configured=false
+          if [ "$code" = '200' ]; then
+            reached=$(jq -r 'has("openai_api_key_configured")' "$tmp" 2>/dev/null || echo false)
+            configured=$(jq -r '.openai_api_key_configured // false' "$tmp" 2>/dev/null || echo false)
+          fi
+          rm -f "$tmp"
+          printf 'P4_LIVETRANSLATION_OIDC_PROBE {"http_status":%s,"probe_reachable":%s,"openai_api_key_configured":%s,"plaintext_exposed":false}\n' "$code" "$reached" "$configured" > /tmp/comment.txt
+          gh pr comment 31 --body-file /tmp/comment.txt
