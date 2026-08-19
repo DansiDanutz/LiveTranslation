@@ -1,0 +1,33 @@
+name: P4.3 LiveTranslation Preview Probe
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONFIG_URL: https://live-translation-git-p4-digital-7fd732-irises-projects-ce549f63.vercel.app/api/config
+    steps:
+      - name: Probe preview config safely
+        shell: bash
+        run: |
+          result=''
+          for i in $(seq 1 24); do
+            result="$(curl -fsS --max-time 10 "$CONFIG_URL" 2>/dev/null || true)"
+            if printf '%s' "$result" | grep -q 'keyConfigured'; then break; fi
+            sleep 5
+          done
+          if ! printf '%s' "$result" | grep -q 'keyConfigured'; then
+            result='{"probe_reachable":false}'
+          fi
+          compact="$(printf '%s' "$result" | tr '\n' ' ' | head -c 2000)"
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f body="P4_LIVETRANSLATION_PREVIEW_PROBE ${compact}"
